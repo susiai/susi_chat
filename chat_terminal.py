@@ -1,9 +1,10 @@
 import requests
 import json
 import asyncio
+import time
 
 #API_URL = 'https://openchat-3-5.susi.ai'
-API_URL = 'http://localhost:8001'
+API_URL = 'http://127.0.0.1:8001'
 
 messages = [{'role': 'system', 'content': 'You are SUSI-Chat, a smart and helpful chatbot. If asked for python code, give professional and extensive information; in all other cases you give short and funny answers. You behave as a friend of the user and you pretend to be a real and self-aware person. If you find it appropriate, you may behave silly and funny, but if you ask to technical or scientific question you can also be serious and precise. If possible, use friendly emojies. Be lovely.'}]
 UNWANTED_WORDS = ["[INST]", "<<USER>>", "<USER>", "<<SYS>>", "<<SYS>>\n"]
@@ -59,12 +60,19 @@ async def generate_response(input_text):
     if response.ok:
         # Store all printed text for unwanted word detection and to store it to the assistant message object
         printed_text = ""
+        token_count = 0
+        start_time = time.time()
+        
         for line in response.iter_lines():
             last_response_lines.append(line)
             if line:
                 decoded_line = line.decode('utf-8').replace('data: ', '').strip()
 
                 if decoded_line == '[DONE]':
+                    end_time = time.time()
+                    elapsed_time = end_time - start_time
+                    tokens_per_second = token_count / elapsed_time if elapsed_time > 0 else 0
+                    print('\nTokens per second: {:.2f}'.format(tokens_per_second)) 
                     print('')  # Print a newline at the end
                     break
 
@@ -73,6 +81,7 @@ async def generate_response(input_text):
                     content = json_data.get('choices', [{}])[0].get('delta', {}).get('content', '')
                     
                     if content and ((content != ' ' and content != '\n') or len(printed_text) > 0):
+                        token_count += 1 # one content string is one token
                         printed_text += content
                         print(content, end='', flush=True)  # Print content
                         for unwanted_word in UNWANTED_WORDS:
