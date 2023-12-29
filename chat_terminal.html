@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>JS Bash Terminal Emulator</title>
+    <style>
+        body, html {
+            height: 100%;
+            margin: 0;
+            font-family: 'Courier New', Courier, monospace;
+            background-color: black;
+            color: green;
+            overflow: hidden;
+        }
+
+        #terminal {
+            height: 100%;
+            padding: 10px;
+            cursor: text;
+            overflow-y: auto; /* Enable vertical scrolling */
+        }
+
+        #terminal:focus {
+            outline: none;
+        }
+
+        .input-line {
+            white-space: pre-wrap;
+            min-height: 20px;
+            color: lightgreen; /* Light green color for user input */
+        }
+
+        .output {
+            color: green; /* Regular green color for output */
+        }
+    </style>
+</head>
+<body>
+    <div id="terminal" contenteditable="true"></div>
+
+    <script>
+        const terminal = document.getElementById('terminal');
+        let lastInput = '';
+        let currentPath = '/';
+        let fileSystem = {'/': {}};
+        let poemStack = [];
+        let poemInterval;
+      
+        function initializeTerminal() {
+            // [Event listener code remains unchanged]
+        }
+
+        function executeCommand(command) {
+            const output = document.createElement('div');
+            output.classList.add('output');
+            const args = command.split(' ');
+            switch (args[0]) {
+                case 'touch':
+                    touch(args[1]);
+                    break;
+                case 'mv':
+                    mv(args[1], args[2]);
+                    break;
+                case 'more':
+                    output.textContent = more(args[1]);
+                    break;
+                case 'cat':
+                    cat(args[1]);
+                    return; // Skip adding output for cat
+                case 'ls':
+                    output.textContent = ls();
+                    break;
+                case 'pwd':
+                    output.textContent = currentPath;
+                    break;
+                case 'cd':
+                    cd(args[1]);
+                    break;
+	        case 'mkdir':
+                    mkdir(args[1]);
+                    break;
+                case 'rmdir':
+                    rmdir(args[1]);
+                    break;
+	        case 'tree':
+                    output.innerHTML = tree(fileSystem, '', '');
+                    break;
+	        case 'poem':
+                    poem();
+                    return; // Skip adding output for poem
+                default:
+                    output.textContent = 'llm not yet connected: ' + command;
+            }
+            terminal.appendChild(output);
+            scrollToBottom();
+        }
+
+	function touch(fileName) {
+            if (!fileName) return;
+            const dir = getFile(currentPath);
+            if (dir) {
+                dir[fileName] = '';
+            }
+        }
+
+        function mv(oldName, newName) {
+            const dir = getFile(currentPath);
+            if (dir && dir[oldName]) {
+                dir[newName] = dir[oldName];
+                delete dir[oldName];
+            }
+        }
+
+        function more(fileName) {
+            const file = getFile(currentPath + fileName);
+            return typeof file === 'string' ? file : 'Error: ' + fileName + ' is not a file';
+        }
+
+        function cat(fileName) {
+            lastInput = ''; // Reset last input for cat command
+            terminal.addEventListener('keydown', function catListener(event) {
+                if (event.key === 'Enter') {
+                    const dir = getFile(currentPath);
+                    if (dir) {
+                        dir[fileName] = terminal.textContent.split('\n').pop().slice(1);
+                    }
+                    terminal.removeEventListener('keydown', catListener);
+                    appendInputPrefix();
+                }
+            });
+        }
+	
+        function ls() {
+            const dir = getFile(currentPath);
+            return dir ? Object.keys(dir).join('\n') : 'Error: Invalid directory';
+        }
+
+	function cd(path) {
+            let newPath = currentPath;
+            if (path === '..') {
+                newPath = currentPath.split('/').filter(Boolean).slice(0, -1).join('/') || '/';
+            } else {
+                newPath = currentPath + (currentPath === '/' ? '' : '/') + path;
+            }
+            if (getFile(newPath) !== undefined) {
+                currentPath = newPath;
+            }
+        }
+
+        function getFile(path) {
+            return path.split('/').filter(Boolean).reduce((obj, part) => (obj && obj[part] !== undefined) ? obj[part] : null, fileSystem);
+        }
+
+	function mkdir(dirName) {
+            if (!dirName) return;
+            const dir = getFile(currentPath);
+            if (dir && !dir[dirName]) {
+                dir[dirName] = {};
+            }
+        }
+
+        function rmdir(dirName) {
+            if (!dirName) return;
+            const dir = getFile(currentPath);
+            if (dir && dir[dirName] && isEmpty(dir[dirName])) {
+                delete dir[dirName];
+            }
+        }
+
+        function isEmpty(obj) {
+            return Object.keys(obj).length === 0;
+        }
+
+	function tree(node, prefix, result) {
+            let keys = Object.keys(node);
+            keys.forEach((key, index) => {
+                const last = index === keys.length - 1;
+                result += prefix + (last ? '└─ ' : '├─ ') + key + '\n';
+                if (typeof node[key] === 'object') {
+                    result = tree(node[key], prefix + (last ? '    ' : '│   '), result);
+                }
+            });
+            return result;
+        }
+
+	function poem() {
+            const poemText = "In the shell, commands do dwell; With each keystroke, stories they tell.";
+            const words = poemText.split(/\s+/);
+            poemStack = [];
+            clearInterval(poemInterval);
+
+
+	    // Producer - adding words to stack with delay
+            words.forEach((word, index) => {
+                setTimeout(() => {
+                    poemStack.push(word);
+                    if (index === words.length - 1) {
+                        poemStack.push('[stop]');
+                    }
+                }, index * 100);
+            });
+
+            // Consumer - reading words from stack and displaying in a single line
+            let poemLine = document.createElement('div');
+            poemLine.classList.add('output');
+            terminal.appendChild(poemLine);
+
+            poemInterval = setInterval(() => {
+                if (poemStack.length > 0) {
+                    const word = poemStack.shift();
+                    if (word === '[stop]') {
+                        clearInterval(poemInterval);
+                        appendInputPrefix(); // Append input prefix after poem is done
+                    } else {
+                        poemLine.textContent += (poemLine.textContent ? ' ' : '') + word;
+                        scrollToBottom();
+                    }
+                }
+            }, 100);
+        }
+	
+        function initializeTerminal() {
+            terminal.addEventListener('keydown', function(event) {
+                if (event.key === 'Enter') {
+                    event.preventDefault();
+                    const allText = terminal.textContent;
+                    const inputText = allText.substring(allText.lastIndexOf('>') + 1);
+                    if (inputText.trim() !== lastInput.trim()) {
+                        executeCommand(inputText.trim());
+                        lastInput = inputText;
+                    }
+                    appendInputPrefix();
+                }
+            });
+            appendInputPrefix();
+        }
+
+	
+        function appendInputPrefix() {
+            const inputLine = document.createElement('div');
+            inputLine.classList.add('input-line');
+            inputLine.textContent = '>';
+            terminal.appendChild(inputLine);
+            placeCaretAtEnd(inputLine);
+            scrollToBottom();
+        }
+
+        function placeCaretAtEnd(el) {
+            el.focus();
+            if (typeof window.getSelection != "undefined"
+                    && typeof document.createRange != "undefined") {
+                var range = document.createRange();
+                range.selectNodeContents(el);
+                range.collapse(false);
+                var sel = window.getSelection();
+                sel.removeAllRanges();
+                sel.addRange(range);
+            }
+        }
+
+        function scrollToBottom() {
+            terminal.scrollTop = terminal.scrollHeight;
+        }
+
+        initializeTerminal();
+    </script>
+</body>
+</html>
