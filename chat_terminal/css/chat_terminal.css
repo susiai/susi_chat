@@ -1,0 +1,29 @@
+body, html {
+    height: 100%;
+    margin: 0;
+    font-family: 'Courier New', Courier, monospace;
+    background-color: black;
+    color: green;
+    overflow: hidden;
+}
+
+#terminal {
+    height: 100%;
+    padding: 10px;
+    cursor: text;
+    overflow-y: auto; /* Enable vertical scrolling */
+}
+
+#terminal:focus {
+    outline: none;
+}
+
+.input-line {
+    white-space: pre-wrap;
+    min-height: 20px;
+    color: lightgreen; /* Light green color for user input */
+}
+
+.output {
+    color: green; /* Regular green color for output */
+}
