@@ -9,6 +9,14 @@ let apihost = 'http://localhost:8001';
 let messages = [];
 resetMessages();
 const stringsToRemove = ["[INST]", "<<USER>>", "<</INST>>", "<<SYS>>", "</SYS>>", "<|im_start|>system", "<|im_start|>user", "<|im_start|>assistant", "<|im_start|>"];
+hljs.highlightAll();
+marked.setOptions({
+    langPrefix: 'language-',
+    highlight: function(code, lang) {
+      const language = hljs.getLanguage(lang) ? lang : 'plaintext';
+      return hljs.highlight(code, { language }).value;
+    }
+  });
 
 function initializeTerminal() {
     // [Event listener code remains unchanged]
@@ -286,8 +294,13 @@ async function llm(prompt) {
                         if (json.choices[0].delta.content) {
                             let outputText = json.choices[0].delta.content;
                             fullOutputText = removeStringsFromEnd(fullOutputText + outputText, stringsToRemove);
-                            //outputText = outputText.replace(/\n/g, '<br>');
-                            terminalLine.textContent = fullOutputText;
+                            terminalLine.innerHTML = `${marked.parse(fullOutputText, { sanitize: true })}`;
+                            terminalLine.querySelectorAll('pre code').forEach((block) => {
+                                if (!block.dataset.highlighted) {
+                                    hljs.highlightElement(block);
+                                    block.dataset.highlighted = true;
+                                }
+                            });
                             scrollToBottom();
                         }
                     } catch (e) {

@@ -3,7 +3,7 @@ body, html {
     margin: 0;
     font-family: 'Courier New', Courier, monospace;
     background-color: black;
-    color: green;
+    color: limegreen;
     overflow: hidden;
 }
 
@@ -21,9 +21,9 @@ body, html {
 .input-line {
     white-space: pre-wrap;
     min-height: 20px;
-    color: lightgreen; /* Light green color for user input */
+    color: lightgreen;
 }
 
 .output {
-    color: green; /* Regular green color for output */
+    color: lightgreen;
 }

@@ -7,3 +7,13 @@ We implement a chat interface to communicate with a LLM. The following ways of c
 - using a voice interface: console inputs are done via speech recognition and responses are done either on a console or using text-to-speech
 
 All of those options shall be possible either on a normal computer or using a Raspberry Pi which also should be able to show that the whole operation is done without internet connection.
+
+## Running a chat server
+
+We need a LLM as back-end for the chat. We use llama.cpp for this. Consider you have checked out the project llama.cpp in parallel to this repository, then you can do:
+
+```
+../llama.cpp/server --host 0.0.0.0 --port 8001 -m ~/models/mixtral-8x7b-v0.1.Q8_0.gguf --path ../susi_chat/chat_terminal/
+```
+
+.. to run llama.cpp with the mixtral model hosting also susi_chat at http://localhost:8001
