@@ -5,10 +5,11 @@ let fileSystem = { '/': {} };
 let terminalStack = [];
 let terminalInterval;
 let apihost = 'http://localhost:8001';
-//let apihost = 'https://openchat-3-5.susi.ai';
 let messages = [];
 resetMessages();
-const stringsToRemove = ["[INST]", "<<USER>>", "<</INST>>", "<<SYS>>", "</SYS>>", "<|im_start|>system", "<|im_start|>user", "<|im_start|>assistant", "<|im_start|>"];
+const stringsToRemove = [
+    "[INST]", "<<USER>>", "<</INST>>", "<<SYS>>", "</SYS>>",
+    "<|im_start|>system", "<|im_start|>user", "<|im_start|>assistant", "<|im_start|>"];
 hljs.highlightAll();
 marked.setOptions({
     langPrefix: 'language-',
@@ -88,12 +89,16 @@ function executeCommand(command) {
                         log('chop: chop');
                         log('    Remove the last communication question/anwser.');
                         break;
+                    case 'edit':
+                        log('edit: edit <file>');
+                        log('    Edit a file.');
+                        break;
                     default:
                         log('Error: Invalid command');
                 }
             } else {
-                log('Available commands: help, reset, touch, mv, less, cat, ls, pwd, cd, mkdir, rmdir, tree, set, get, chop');
-                log('Type "help <command>" to get more information about a specific command');
+                log('Available commands: help, reset, touch, mv, less, cat, ls, pwd, cd, mkdir, rmdir, tree, set, get, chop\n' +
+                    'Type "help <command>" to get more information about a specific command');
             }
             break;
         case 'reset':
@@ -128,6 +133,9 @@ function executeCommand(command) {
             break;
         case 'tree':
             log(tree(fileSystem, '', ''));
+            break;
+        case 'edit':
+            edit(args[1]);
             break;
         case 'set':
             if (args[1] === 'api' && args[2]) {
@@ -234,6 +242,51 @@ function isEmpty(obj) {
     return Object.keys(obj).length === 0;
 }
 
+function edit(fileName) {
+
+    fileContent = getFile(currentPath + fileName);
+    if (typeof fileContent != 'string') {
+        touch(fileName); // Create a new file
+        fileContent = '';
+    }
+
+    const editor = document.createElement('textarea');
+    editor.value = fileContent;
+
+    // Set the number of rows based on the number of lines in the file
+    const numberOfLines = fileContent.split('\n').length;
+    editor.rows = numberOfLines;
+
+    // Set the number of columns based on the current window width
+    const maxWidth = window.innerWidth || document.documentElement.clientWidth || document.body.clientWidth;
+    const charWidth = 8; // Average width of a character in pixels. Adjust as needed.
+    const numberOfCols = Math.floor(maxWidth / charWidth);
+    editor.cols = numberOfCols;
+    
+    // Append the editor and the save button to the terminal
+    terminal.appendChild(editor);
+
+    const saveButton = document.createElement('button');
+    saveButton.textContent = 'Save';
+    terminal.appendChild(saveButton);
+
+    saveButton.addEventListener('click', function() {
+        const newContent = editor.value;
+        saveFile(fileName, newContent);
+        terminal.removeChild(editor);
+        terminal.removeChild(saveButton);
+    });
+}
+
+function saveFile(fileName, content) {
+    const dir = getFile(currentPath);
+    if (dir && dir[fileName] !== undefined) {
+        dir[fileName] = content;
+    } else {
+        log('Error: Unable to save file ' + fileName);
+    }
+}
+
 function tree(node, prefix, result) {
     let keys = Object.keys(node);
     keys.forEach((key, index) => {
@@ -327,7 +380,43 @@ async function llm(prompt) {
     }
 }
 
-function log(terminalText) {
+async function log(terminalText) {
+    let terminalLine = document.createElement('div');
+    terminalLine.classList.add('output');
+    terminal.appendChild(terminalLine);
+    const tokens = terminalText.split(/ +/);
+    //const tokens = terminalText.split(/\s+/);
+    terminalStack = [];
+
+    // Producer - adding words to stack with delay
+    tokens.forEach((token, index) => {
+        setTimeout(() => {
+            terminalStack.push(token);
+            if (index === tokens.length - 1) {
+                terminalStack.push('[DONE]');
+            }
+        }, index * 130);
+    });
+
+    let fullOutputText = "";
+    terminalInterval = setInterval(() => {
+        if (terminalStack.length > 0) {
+            const token = terminalStack.shift();
+            fullOutputText = fullOutputText + token;
+            const processChunk = async () => {
+                if (token === '[DONE]') return;
+                terminalLine.innerHTML = `${marked.parse(fullOutputText, { sanitize: true })}`;
+                scrollToBottom();
+            }
+            processChunk();
+        };
+        scrollToBottom();
+    }, 50);
+
+}
+
+function log1(terminalText) {
+    terminalText = terminalText.replace(/\n/g, '<br>');
     const tokens = terminalText.split(/\s+/);
     terminalStack = [];
     clearInterval(terminalInterval);
@@ -354,8 +443,8 @@ function log(terminalText) {
                 clearInterval(terminalInterval);
             } else {
                 terminalLine.textContent += (terminalLine.textContent ? ' ' : '') + token;
-                scrollToBottom();
             }
+            scrollToBottom();
         }
     }, 50);
 }

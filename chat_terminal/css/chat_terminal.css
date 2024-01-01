@@ -3,7 +3,7 @@ body, html {
     margin: 0;
     font-family: 'Courier New', Courier, monospace;
     background-color: black;
-    color: limegreen;
+    color: LawnGreen;
     overflow: hidden;
 }
 
@@ -21,9 +21,23 @@ body, html {
 .input-line {
     white-space: pre-wrap;
     min-height: 20px;
-    color: lightgreen;
+    color: LawnGreen;
 }
 
 .output {
-    color: lightgreen;
+    color: Aquamarine;
+}
+
+/* Style for the text editor (textarea) */
+textarea {
+    color: gold;      /* Text color in the editor */
+    background-color: black;  /* Background color of the editor */
+    border: 2px solid LawnGreen;  /* Green border for the editor */
+}
+
+/* Style for the save button */
+button {
+    color: black;          /* Text color inside the button */
+    background-color: LawnGreen; /* Background color of the button */
+    border: 2px solid LawnGreen; /* Border color of the button */
 }
