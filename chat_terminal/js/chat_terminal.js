@@ -6,6 +6,8 @@ let terminalStack = [];
 let terminalInterval;
 let apihost = localStorage.getItem('apihost') || 'http://localhost:8001';
 let promptPrefix = '] ';
+let pp = 0.0; // prompt processing
+let tg = 0.0; // text generation
 let messages = [];
 terminalStack = [];
 resetMessages();
@@ -230,7 +232,9 @@ function executeCommand(command) {
             localStorage.setItem('team-' + teamname + '-agents', teamagents);
             log('Team ' + teamname + ' defined with agents: ' + teamagents);
             break;
-
+        case 'performance':
+            log('<pre>pp: ' + pp + ' ms<br>tg: ' + tg + ' t/s</pre>');
+            break;
         case 'mem':
             // print out the memory, everything that is defined in the localStorage:
             let keys = Object.keys(localStorage).sort();
@@ -241,6 +245,17 @@ function executeCommand(command) {
             }
             memory += '</pre>\n';
             log(memory);
+            break;
+        case 'bulletpoints':
+            // read last assistant message and parse out bulletpoints from the markdown
+            let bulletpoints = bulletpoints();
+            if (bulletpoints) {
+                buttelpoints = '\n```\n' + bulletpoints.join('\n') + '\n```\n';
+                log(buttelpoints);
+                console.log(buttelpoints);
+            } else {
+                log('No bulletpoints found');
+            }
             break;
         default:
             // process the input command as prompt for the llm
@@ -273,6 +288,21 @@ function executeCommand(command) {
             break;
     }
     scrollToBottom();
+}
+
+function bulletpoints() {
+    // read last assistant message and parse out bulletpoints from the markdown
+    let lastAssistantMessage = messages[messages.length - 1].content;
+
+    //console.log(lastAssistantMessage); // print the last assistant message to the javascript terminal
+
+    let bulletpoints = lastAssistantMessage.match(/\d+\.\s*(.*)/g);
+    if (bulletpoints) {
+        return bulletpoints;
+    } else {
+        bulletpoints = lastAssistantMessage.match(/- (.*)/g);
+        return bulletpoints;
+    }
 }
 
 function touch(fileName) {
@@ -440,11 +470,18 @@ async function llm(prompt) {
     if (response.ok) {
         const reader = response.body.getReader();
         let fullOutputText = "";
+        let startTime = performance.now();
+        let processingTime = 0;
+        let tokenCount = 0;
         const processChunk = async () => {
             const result = await reader.read();
             if (result.done) {
                 messages.push({ role: "assistant", content: fullOutputText });
                 reader.cancel();
+                // compute performance measures
+                let endTime = performance.now();
+                pp = Math.floor(processingTime - startTime);
+                tg = Math.floor(100 * (endTime - processingTime) / tokenCount) / 100;
                 return;
             }
             let lines = new TextDecoder().decode(result.value).split('\n');
@@ -474,6 +511,8 @@ async function llm(prompt) {
                                     block.dataset.highlighted = true;
                                 }
                             });
+                            if (processingTime == 0) processingTime = performance.now();
+                            tokenCount += 1;
                             scrollToBottom();
                         }
                     } catch (e) {
@@ -548,8 +587,24 @@ async function log(terminalText) {
 
 function initializeTerminal() {
     terminal.addEventListener('keydown', function (event) {
-        if (event.key === 'Enter') {
-            event.preventDefault();
+        // read the text entered in the terminal when the user hits the enter key, but distinguish enter with and without shift or ctrl:
+        if (event.key === 'Enter' && event.shiftKey) {
+            // the user has entered a new line into the input console using shift+enter
+            event.preventDefault(); // Prevent default Enter behavior
+
+            // wen now just want to add a newline character to the last input line. There are several one and we want the last one
+            const inputLines = terminal.querySelectorAll('.input-line');
+            const inputLine = inputLines[inputLines.length - 1];
+
+            if (inputLine) {
+                inputLine.innerHTML += '<br>\u200B'; // Insert <br> followed by a zero-width space
+                placeCaretAtEnd(inputLine);
+            }
+
+        } else if (event.key === 'Enter') {
+            // user finished entering the command with the enter key
+            event.preventDefault(); // Prevent default Enter behavior
+
             const allText = terminal.textContent;
             const inputText = allText.substring(allText.lastIndexOf(promptPrefix) + 1);
             if (inputText.trim() !== lastInput.trim()) {
