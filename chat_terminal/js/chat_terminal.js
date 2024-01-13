@@ -4,8 +4,10 @@ let currentPath = '/';
 let fileSystem = { '/': {} };
 let terminalStack = [];
 let terminalInterval;
-let apihost = 'http://localhost:8001';
+let apihost = localStorage.getItem('apihost') || 'http://localhost:8001';
+let promptPrefix = '] ';
 let messages = [];
+terminalStack = [];
 resetMessages();
 const stringsToRemove = [
     "[INST]", "<<USER>>", "<</INST>>", "<<SYS>>", "</SYS>>",
@@ -18,6 +20,10 @@ marked.setOptions({
       return hljs.highlight(code, { language }).value;
     }
   });
+
+log("SUSI.AI Chat v2");
+log("API Host: " + apihost);
+log("Type 'help' for a list of available commands");
 
 function initializeTerminal() {
     // [Event listener code remains unchanged]
@@ -97,12 +103,21 @@ function executeCommand(command) {
                         log('Error: Invalid command');
                 }
             } else {
-                log('Available commands: help, reset, touch, mv, less, cat, ls, pwd, cd, mkdir, rmdir, tree, set, get, chop\n' +
+                log('Available commands: help, reset, touch, mv, less, cat, ls, pwd, cd, mkdir, rmdir, tree, set, get, chop<br>' +
                     'Type "help <command>" to get more information about a specific command');
             }
             break;
         case 'reset':
             resetMessages();
+            break;
+        case 'host':
+            if (args[1]) {
+                apihost = args[1];
+                localStorage.setItem('apihost', apihost);
+                log('set api to ' + apihost);
+            } else {
+                log('Error: Invalid attribute');
+            }
             break;
         case 'touch':
             touch(args[1]);
@@ -203,7 +218,7 @@ function cat(fileName) {
 
 function ls() {
     const dir = getFile(currentPath);
-    return dir ? Object.keys(dir).join('\n') : 'Error: Invalid directory';
+    return dir ? Object.keys(dir).join('<br>') : 'Error: Invalid directory';
 }
 
 function cd(path) {
@@ -291,7 +306,7 @@ function tree(node, prefix, result) {
     let keys = Object.keys(node);
     keys.forEach((key, index) => {
         const last = index === keys.length - 1;
-        result += prefix + (last ? '└─ ' : '├─ ') + key + '\n';
+        result += prefix + (last ? '&#9492;&#9472; ' : '&#9500;&#9472; ') + key + '<br>';
         if (typeof node[key] === 'object') {
             result = tree(node[key], prefix + (last ? '    ' : '│   '), result);
         }
@@ -381,34 +396,45 @@ async function llm(prompt) {
 }
 
 async function log(terminalText) {
+    // tokenize terminalText
+    const tokens = terminalText.split(/ +/);
+
+    // in case that the terminalStack is not empty, add the new message to the end of the last message
+    if (terminalStack.length > 0) {
+        // remove the last element of the terminalStack which should be '[DONE]'
+        lastToken = terminalStack.pop();
+        // check if lastToken is actually '[DONE]'
+        if (lastToken !== '[DONE]') {
+            terminalStack.push(lastToken);
+        }
+
+        tokens.forEach(token => {terminalStack.push(token + ' ');});
+        terminalStack.push('<br>');
+        terminalStack.push('[DONE]');
+        return;
+    }
+
     let terminalLine = document.createElement('div');
     terminalLine.classList.add('output');
     terminal.appendChild(terminalLine);
-    const tokens = terminalText.split(/ +/);
-    //const tokens = terminalText.split(/\s+/);
-    terminalStack = [];
 
-    // Producer - adding words to stack with delay
-    tokens.forEach((token, index) => {
-        setTimeout(() => {
-            terminalStack.push(token);
-            if (index === tokens.length - 1) {
-                terminalStack.push('[DONE]');
-            }
-        }, index * 130);
-    });
+    // Producer - adding words to stack
+    tokens.forEach(token => {terminalStack.push(token + ' ');});
+    terminalStack.push('<br>');
+    terminalStack.push('[DONE]');
 
     let fullOutputText = "";
     terminalInterval = setInterval(() => {
         if (terminalStack.length > 0) {
             const token = terminalStack.shift();
-            fullOutputText = fullOutputText + token;
-            const processChunk = async () => {
-                if (token === '[DONE]') return;
-                terminalLine.innerHTML = `${marked.parse(fullOutputText, { sanitize: true })}`;
-                scrollToBottom();
+            fullOutputText += token;
+
+            if (token === '[DONE]') {
+                clearInterval(terminalInterval);
+                return;
             }
-            processChunk();
+
+            terminalLine.innerHTML = `${marked.parse(fullOutputText, { sanitize: true })}`;
         };
         scrollToBottom();
     }, 50);
@@ -454,7 +480,7 @@ function initializeTerminal() {
         if (event.key === 'Enter') {
             event.preventDefault();
             const allText = terminal.textContent;
-            const inputText = allText.substring(allText.lastIndexOf('>') + 1);
+            const inputText = allText.substring(allText.lastIndexOf(promptPrefix) + 1);
             if (inputText.trim() !== lastInput.trim()) {
                 executeCommand(inputText.trim());
                 lastInput = inputText;
@@ -468,7 +494,7 @@ function initializeTerminal() {
 function appendInputPrefix() {
     const inputLine = document.createElement('div');
     inputLine.classList.add('input-line');
-    inputLine.textContent = '>';
+    inputLine.textContent = promptPrefix;
     terminal.appendChild(inputLine);
     placeCaretAtEnd(inputLine);
     scrollToBottom();
