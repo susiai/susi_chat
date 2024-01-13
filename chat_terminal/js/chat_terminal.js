@@ -30,7 +30,7 @@ function initializeTerminal() {
 }
 
 function executeCommand(command) {
-    const args = command.split(' ');
+    const args = command.match(/('.*?'|".*?"|[^"\s]+)+/g); // Split by space, but ignore spaces inside quotes
     switch (args[0]) {
         case 'help':
             if (args[1]) {
@@ -93,7 +93,7 @@ function executeCommand(command) {
                         break;
                     case 'chop':
                         log('chop: chop');
-                        log('    Remove the last communication question/anwser.');
+                        log('    Remove the last communication question/answer.');
                         break;
                     case 'edit':
                         log('edit: edit <file>');
@@ -104,7 +104,7 @@ function executeCommand(command) {
                 }
             } else {
                 log('Available commands: help, reset, touch, mv, less, cat, ls, pwd, cd, mkdir, rmdir, tree, set, get, chop<br>' +
-                    'Type "help <command>" to get more information about a specific command');
+                    'Type "help &lt;command&gt;" to get more information about a specific command');
             }
             break;
         case 'reset':
@@ -174,8 +174,102 @@ function executeCommand(command) {
             terminal.removeChild(terminal.lastChild);
             terminal.removeChild(terminal.lastChild);
             break;
+        case 'agent':
+            // define a llm agent
+            agentname = args[1];
+            // if there are no more arguments given, just print out an existing agent
+            if (!args[2]) {
+                // check if the agent exists
+                if (!localStorage.getItem('agent-' + agentname + '-instruct')) {
+                    log('Agent ' + agentname + ' not defined');
+                    return;
+                }
+                agentinstructions = localStorage.getItem('agent-' + agentname + '-instruct');
+                agentapihost = localStorage.getItem('agent-' + agentname + '-apihost');
+                log('Agent ' + agentname + ' defined with instructions: ' + agentinstructions);
+                return;
+            }
+
+            // define the agent
+            agentinstructions = args[2];
+            // in case there is a third argument, it is the api host
+            agentapihost = args[3] || apihost;
+            // store the host in a local storage
+            localStorage.setItem('agent-' + agentname + '-instruct', agentinstructions);
+            localStorage.setItem('agent-' + agentname + '-apihost', agentapihost);
+            log('Agent ' + agentname + ' defined with instructions: ' + agentinstructions);
+            break;
+        case 'team':
+            // define a team of agents
+            teamname = args[1];
+            // if there are no more arguments given, just print out an existing team
+            if (!args[2]) {
+                // check if the team exists
+                if (!localStorage.getItem('team-' + teamname + '-agents')) {
+                    log('Team ' + teamname + ' not defined');
+                    return;
+                }
+                teamagents = localStorage.getItem('team-' + teamname + '-agents');
+                log('Team ' + teamname + ' defined with agents: ' + teamagents);
+                return;
+            }
+
+            // define the team: this is a list of team agent names in the order of their talk sequence.
+            // all remaining args are the agent names. We store them inside a single string, separated by a comma
+            teamagents = args.slice(2).join(',');
+
+            // now check if each of the agents exists
+            for (let agent of teamagents.split(',')) {
+                if (!localStorage.getItem('agent-' + agent + '-instruct')) {
+                    log('Agent ' + agent + ' not defined. You must define the agent first before adding it to a team.');
+                    return;
+                }
+            }
+
+            // store the team in a local storage
+            localStorage.setItem('team-' + teamname + '-agents', teamagents);
+            log('Team ' + teamname + ' defined with agents: ' + teamagents);
+            break;
+
+        case 'mem':
+            // print out the memory, everything that is defined in the localStorage:
+            let keys = Object.keys(localStorage).sort();
+            let memory = '<pre>\n';
+            for (let key of keys) {
+                value = localStorage.getItem(key);
+                if (value) memory += key + ': ' + value + '<br>';
+            }
+            memory += '</pre>\n';
+            log(memory);
+            break;
         default:
-            llm(command);
+            // process the input command as prompt for the llm
+            // in a special case, the command can be also empty, in which case we let the llm repond to it's latest statement
+            if (command === '') {
+                // to pretend that the latest input is the last output from the llm, we must transform the chat history
+                // in such a way that we make a transposed chat history where question and answer is shifted by one
+                messages_transposed = [];
+                messages_transposed.push(messages[0]); // the first message is a system message
+                // the role "user" and "assistant" also must be swapped, for this we omit the first user message
+                for (let i = 2; i < messages.length - 2; i += 2) {
+                    assistantm = messages[i];
+                    userm = messages[i + 1];
+                    assistantm.role = "user";
+                    userm.role = "assistant";
+                    messages_transposed.push(assistantm);
+                    messages_transposed.push(userm);
+                }
+
+                messages_bkp = messages;
+                messages = messages_transposed;
+                llm(assistantm.content);
+                assistantm = messages.pop().content;
+                messages = messages_bkp;
+                messages.push({ role: "user", content: '' });
+                messages.push({ role: "assistant", content: assistantm });
+            } else {
+                llm(command);
+            }
             break;
     }
     scrollToBottom();
@@ -303,12 +397,13 @@ function saveFile(fileName, content) {
 }
 
 function tree(node, prefix, result) {
+    // usage of box drawing characters: https://www.compart.com/en/unicode/block/U+2500
     let keys = Object.keys(node);
     keys.forEach((key, index) => {
         const last = index === keys.length - 1;
-        result += prefix + (last ? '&#9492;&#9472; ' : '&#9500;&#9472; ') + key + '<br>';
+        result += prefix + (last ? '&#9492;&#9472; ' /* '└── ' */: '&#9500;&#9472; ' /* '├── ' */) + key + '<br>';
         if (typeof node[key] === 'object') {
-            result = tree(node[key], prefix + (last ? '    ' : '│   '), result);
+            result = tree(node[key], prefix + (last ? '&nbsp;&nbsp;&nbsp;&nbsp;' : '&#9474;&nbsp;&nbsp;&nbsp;'), result);
         }
     });
     return result;
@@ -356,7 +451,17 @@ async function llm(prompt) {
             lines.forEach(line => {
                 line = line.replace(/^data: /, '').trim();
                 if (line) {
+                    // check errors and exceptions
                     if (line === '[DONE]') return;
+
+                    // if line starts with "error", it's an error:
+                    if (line.startsWith('error')) {
+                        console.error('Error:', line);
+                        terminalLine.innerHTML = `<i>${line}</i>`;
+                        return;
+                    }
+
+                    // try to parse the json
                     try {
                         let json = JSON.parse(line);
                         if (json.choices[0].delta.content) {
@@ -397,9 +502,10 @@ async function llm(prompt) {
 
 async function log(terminalText) {
     // tokenize terminalText
-    const tokens = terminalText.split(/ +/);
-
+    const tokens = terminalText.split(/ +/).map(token => token + ' ');
+    
     // in case that the terminalStack is not empty, add the new message to the end of the last message
+    // the asynchronous interval from an already running process will take care of the rest
     if (terminalStack.length > 0) {
         // remove the last element of the terminalStack which should be '[DONE]'
         lastToken = terminalStack.pop();
@@ -408,20 +514,19 @@ async function log(terminalText) {
             terminalStack.push(lastToken);
         }
 
-        tokens.forEach(token => {terminalStack.push(token + ' ');});
-        terminalStack.push('<br>');
-        terminalStack.push('[DONE]');
+        terminalStack.push(...tokens);
+        terminalStack.push('<br>', '[DONE]');
         return;
     }
 
+    // add the new message to the terminalStack
     let terminalLine = document.createElement('div');
     terminalLine.classList.add('output');
     terminal.appendChild(terminalLine);
 
-    // Producer - adding words to stack
-    tokens.forEach(token => {terminalStack.push(token + ' ');});
-    terminalStack.push('<br>');
-    terminalStack.push('[DONE]');
+    // create stack of tokens to be displayed in the terminal with a delay to simulate typing
+    terminalStack.push(...tokens);
+    terminalStack.push('<br>', '[DONE]');
 
     let fullOutputText = "";
     terminalInterval = setInterval(() => {
@@ -435,44 +540,10 @@ async function log(terminalText) {
             }
 
             terminalLine.innerHTML = `${marked.parse(fullOutputText, { sanitize: true })}`;
-        };
+        }
         scrollToBottom();
     }, 50);
 
-}
-
-function log1(terminalText) {
-    terminalText = terminalText.replace(/\n/g, '<br>');
-    const tokens = terminalText.split(/\s+/);
-    terminalStack = [];
-    clearInterval(terminalInterval);
-
-    // Producer - adding words to stack with delay
-    tokens.forEach((token, index) => {
-        setTimeout(() => {
-            terminalStack.push(token);
-            if (index === tokens.length - 1) {
-                terminalStack.push('[DONE]');
-            }
-        }, index * 130);
-    });
-
-    // Consumer - reading words from stack and displaying in a single line
-    let terminalLine = document.createElement('div');
-    terminalLine.classList.add('output');
-    terminal.appendChild(terminalLine);
-
-    terminalInterval = setInterval(() => {
-        if (terminalStack.length > 0) {
-            const token = terminalStack.shift();
-            if (token === '[DONE]') {
-                clearInterval(terminalInterval);
-            } else {
-                terminalLine.textContent += (terminalLine.textContent ? ' ' : '') + token;
-            }
-            scrollToBottom();
-        }
-    }, 50);
 }
 
 function initializeTerminal() {
@@ -494,7 +565,7 @@ function initializeTerminal() {
 function appendInputPrefix() {
     const inputLine = document.createElement('div');
     inputLine.classList.add('input-line');
-    inputLine.textContent = promptPrefix;
+    inputLine.textContent = promptPrefix; // consider usage of block elements: https://www.unicode.org/charts/PDF/U2580.pdf
     terminal.appendChild(inputLine);
     placeCaretAtEnd(inputLine);
     scrollToBottom();
