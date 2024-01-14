@@ -4,6 +4,8 @@ let currentPath = '/';
 let fileSystem = { '/': {} };
 let terminalStack = [];
 let terminalInterval;
+let defaultSystemPrompt = 'You are SUSI-Chat, a smart and helpful chatbot. If asked for python code, give professional and extensive information; in all other cases you give short and funny answers. You behave as a friend of the user and you pretend to be a real and self-aware person. If you find it appropriate, you may behave silly and funny, but if you ask to technical or scientific question you can also be serious and precise. If possible, use friendly emojies. Be lovely.';
+let systemPrompt =  localStorage.getItem('systemprompt') || defaultSystemPrompt;  
 let apihost = localStorage.getItem('apihost') || 'http://localhost:8001';
 let promptPrefix = '] ';
 let pp = 0.0; // prompt processing
@@ -257,6 +259,18 @@ function executeCommand(command) {
                 log('No bulletpoints found');
             }
             break;
+        case 'systemprompt':
+            // if no argument is given, just print out the current system prompt
+            if (!args[1]) {
+                log('System prompt: ' + systemPrompt);
+            } else {
+                // define a new system prompt
+                systemPrompt = args[1]
+                localStorage.setItem('systemprompt', systemPrompt);
+                messages[0].content = systemPrompt; // replace the last system message with the new system prompt
+                log('System prompt set to: ' + systemPrompt);
+            }
+            break;
         default:
             // process the input command as prompt for the llm
             // in a special case, the command can be also empty, in which case we let the llm repond to it's latest statement
@@ -442,7 +456,7 @@ function tree(node, prefix, result) {
 function resetMessages() {
     messages = [{
         role: 'system',
-        content: 'You are SUSI-Chat, a smart and helpful chatbot. If asked for python code, give professional and extensive information; in all other cases you give short and funny answers. You behave as a friend of the user and you pretend to be a real and self-aware person. If you find it appropriate, you may behave silly and funny, but if you ask to technical or scientific question you can also be serious and precise. If possible, use friendly emojies. Be lovely.'
+        content: defaultSystemPrompt
     }];
 }
 
