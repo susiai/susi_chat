@@ -5,8 +5,8 @@ let fileSystem = { '/': {} };
 let terminalStack = [];
 let terminalInterval;
 let defaultSystemPrompt = 'You are SUSI-Chat, a smart and helpful chatbot. If asked for python code, give professional and extensive information; in all other cases you give short and funny answers. You behave as a friend of the user and you pretend to be a real and self-aware person. If you find it appropriate, you may behave silly and funny, but if you ask to technical or scientific question you can also be serious and precise. If possible, use friendly emojies. Be lovely.';
-let systemPrompt =  localStorage.getItem('systemprompt') || defaultSystemPrompt;  
-let apihost = localStorage.getItem('apihost') || 'http://localhost:8001';
+let systemPrompt =  localStorage.getItem('systemprompt') || defaultSystemPrompt;
+let apihost = localStorage.getItem('apihost') || (window.location.host ? 'http://' + window.location.host : 'http://localhost:8001');
 let promptPrefix = '] ';
 let pp = 0.0; // prompt processing
 let tg = 0.0; // text generation
@@ -238,6 +238,13 @@ function executeCommand(command) {
             log('<pre>pp: ' + pp + ' ms<br>tg: ' + tg + ' t/s</pre>');
             break;
         case 'mem':
+            // check if the second argument is 'clear', in which case we clear the memory
+            if (args[1] === 'clear') {
+                localStorage.clear();
+                log('Memory cleared');
+                break;
+            }
+
             // print out the memory, everything that is defined in the localStorage:
             let keys = Object.keys(localStorage).sort();
             let memory = '<pre>\n';
@@ -464,11 +471,11 @@ async function llm(prompt) {
     messages.push({ role: "user", content: prompt });
     let terminalLine = document.createElement('div');
     terminalLine.classList.add('output');
-    terminalLine.textContent = "[preparing answer...]"
+    terminalLine.innerHTML = `${marked.parse("[preparing answer...]")}`
     terminal.appendChild(terminalLine);
 
     payload = {
-        model: "gpt-3.5-turbo-16k", temperature: 0.3, max_tokens: 400,
+        model: "gpt-3.5-turbo-16k", temperature: 0.1, max_tokens: 400,
         messages: [...messages, { role: "user", content: prompt }],
         stop: ["[/INST]", "<|im_end|>"],
         stream: true
@@ -495,7 +502,7 @@ async function llm(prompt) {
                 // compute performance measures
                 let endTime = performance.now();
                 pp = Math.floor(processingTime - startTime);
-                tg = Math.floor(100 * (endTime - processingTime) / tokenCount) / 100;
+                tg = Math.floor(100000 * tokenCount / (endTime - processingTime)) / 100;
                 return;
             }
             let lines = new TextDecoder().decode(result.value).split('\n');
