@@ -10,6 +10,7 @@ let apihost = localStorage.getItem('apihost') || (window.location.host ? 'http:/
 let promptPrefix = '] ';
 let pp = 0.0; // prompt processing
 let tg = 0.0; // text generation
+let stoptokens = ["[/INST]", "<|im_end|>"];
 let messages = [];
 terminalStack = [];
 resetMessages();
@@ -27,7 +28,7 @@ marked.setOptions({
 
 log("SUSI.AI Chat v2");
 log("API Host: " + apihost);
-log("Type 'help' for a list of available commands");
+log("Just Chat or type 'help' for a list of available commands");
 
 function initializeTerminal() {
     // [Event listener code remains unchanged]
@@ -173,10 +174,22 @@ function executeCommand(command) {
             break;
         case 'chop':
             // remove the last communication question/anwser
-            messages.pop();
-            terminal.removeChild(terminal.lastChild);
-            terminal.removeChild(terminal.lastChild);
-            terminal.removeChild(terminal.lastChild);
+            messagesLengthBefore = messages.length;
+            terminalLengthBefore = terminal.childNodes.length;
+            if (messagesLengthBefore > 1 && terminalLengthBefore >= 3) {
+                messages.pop();
+                messagesLengthAfter = messages.length;
+                terminal.removeChild(terminal.lastChild);
+                terminal.removeChild(terminal.lastChild);
+                terminal.removeChild(terminal.lastChild);
+                terminalLengthAfter = terminal.childNodes.length;
+                log('message  size before chop: ' + messagesLengthBefore);
+                log('message  size after  chop: ' + messagesLengthAfter);
+                log('terminal size before chop: ' + terminalLengthBefore);
+                log('terminal size after  chop: ' + terminalLengthAfter);
+            } else {
+                log('No message to chop (yet)');
+            }
             break;
         case 'agent':
             // define a llm agent
@@ -277,6 +290,12 @@ function executeCommand(command) {
                 messages[0].content = systemPrompt; // replace the last system message with the new system prompt
                 log('System prompt set to: ' + systemPrompt);
             }
+            break;
+        case 'run':
+            // we want to execute a program given earlier in the terminal
+            // to do so, we instruct the llm to behave as a programming language interpreter
+            command = "behave as a programming language interpreter and execute the code above.";
+            llm(command);
             break;
         default:
             // process the input command as prompt for the llm
@@ -467,7 +486,26 @@ function resetMessages() {
     }];
 }
 
-async function llm(prompt) {
+// make a synchronous call to the llm without a history, just a context
+async function llma(systemprompt, context, prompt, temperature = 0.1, max_tokens = 400) {
+    m = [
+        {role: 'system', content: systemprompt},
+        {role: "user", content: context},
+        {role: "assistant", content: "ok"},
+        {role: "user", content: prompt}
+    ];
+    payload = {
+        model: "gpt-3.5-turbo-16k", temperature: temperature, max_tokens: max_tokens,
+        messages: m, stop: stoptokens, stream: false
+    }
+    let response = await fetch(apihost + '/v1/chat/completions', {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify(payload)
+    });
+}
+
+async function llm(prompt, temperature = 0.1, max_tokens = 400) {
     messages.push({ role: "user", content: prompt });
     let terminalLine = document.createElement('div');
     terminalLine.classList.add('output');
@@ -475,17 +513,13 @@ async function llm(prompt) {
     terminal.appendChild(terminalLine);
 
     payload = {
-        model: "gpt-3.5-turbo-16k", temperature: 0.1, max_tokens: 400,
-        messages: [...messages, { role: "user", content: prompt }],
-        stop: ["[/INST]", "<|im_end|>"],
-        stream: true
+        model: "gpt-3.5-turbo-16k", temperature: temperature, max_tokens: max_tokens,
+        messages: messages, stop: stoptokens, stream: true
     }
     let response = await fetch(apihost + '/v1/chat/completions', {
         method: "POST",
-        headers: {
-            "Content-Type": "application/json",
-        },
-        body: JSON.stringify(payload),
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify(payload)
     });
 
     if (response.ok) {
