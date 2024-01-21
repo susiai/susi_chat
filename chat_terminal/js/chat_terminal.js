@@ -297,6 +297,61 @@ function executeCommand(command) {
             command = "behave as a programming language interpreter and execute the code above.";
             llm(command);
             break;
+        case 'save':
+        case 'export':
+        case 'download':
+            // save the chat history to a file
+            filename = args[1] || 'chat.txt';
+            mimetype = 'application/json';
+            let datenow = new Date(); // make a date string and remove everything after the dot
+            let dateString = datenow.toLocaleDateString() + ' ' + datenow.toLocaleTimeString();
+            //let dateString = datenow.toISOString().replace(/T/, ' ').replace(/\..+/, '');
+            parts = [];
+            if (!filename.includes('.')) filename += '.txt';
+            if (filename.endsWith('.doc')) filename = filename.replace('.doc', '.docx');
+            if (filename.endsWith('.json')) {
+                jsonString = JSON.stringify(messages, null, 2);
+                parts.push(jsonString);
+            } else if (filename.endsWith('.md') || filename.endsWith('.txt')) {
+                parts.push('# Chat log from ' + dateString + '\n\n');
+                for (let message of messages) {
+                    parts.push('### ' + message.role + '\n' + message.content + '\n\n');
+                }
+                mimetype = filename.endsWith('.md') ? 'text/markdown' : 'text/plain';
+            } else if (filename.endsWith('.csv')) {
+                parts.push('role;content\n');
+                for (let message of messages) {
+                    parts.push(message.role + ';' + message.content + '\n');
+                }
+                mimetype = 'text/csv';
+            } else if (filename.endsWith('.docx')) {
+                const doc = new docx.Document();
+                for (let message of messages) {
+                    doc.addSection({properties: {},
+                        children: [new docx.Paragraph({
+                            children: [new docx.TextRun(message.role + ': ' + message.content)]
+                        })]
+                    });
+                }
+                parts.push(new docx.Packer().toBuffer(doc));
+                mimetype = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+            } else {
+                log('Error: Invalid file extension');
+                return;
+            }
+            // create a blob and download it
+            const blob = new Blob(parts, {type: mimetype});
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.style.display = 'none';
+            a.href = url;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+            log('Saving chat history to file ' + filename);
+            break;
         default:
             // process the input command as prompt for the llm
             // in a special case, the command can be also empty, in which case we let the llm repond to it's latest statement
