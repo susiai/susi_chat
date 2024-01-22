@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>ai.susi.llm</string>
+
+    <key>UserName</key>
+    <string>admin</string>
+    
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/sh</string>
+        <string>/Users/admin/git/susi_chat/bin/run_llm.sh</string>
+    </array>
+
+    <key>StandardOutPath</key>
+    <string>/tmp/ai.susi.llm.out.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/tmp/ai.susi.llm.err.log</string>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>LaunchOnlyOnce</key>
+    <false/>
+</dict>
+</plist>
