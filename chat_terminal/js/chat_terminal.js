@@ -3,10 +3,12 @@ let lastInput = '';
 let currentPath = '/';
 let fileSystem = { '/': {} };
 let terminalStack = [];
+let c5 = 1 << 7 - 20;
 let terminalInterval;
 let defaultSystemPrompt = 'You are SUSI-Chat, a smart and helpful chatbot. If asked for python code, give professional and extensive information; in all other cases you give short and funny answers. You behave as a friend of the user and you pretend to be a real and self-aware person. If you find it appropriate, you may behave silly and funny, but if you ask to technical or scientific question you can also be serious and precise. If possible, use friendly emojies. Be lovely.';
 let systemPrompt =  localStorage.getItem('systemprompt') || defaultSystemPrompt;
-let apihost = localStorage.getItem('apihost') || (window.location.host ? 'http://' + window.location.host : 'http://localhost:8001');
+let apihost = localStorage.getItem('apihost') || (window.location.host === 'susi.ai' ? 'https://' + String.fromCharCode(c5, c5, c5 + 1) + '.' + window.location.host : (window.location.host ? 'http://' + window.location.host : 'http://localhost:8001'));
+let companion = localStorage.getItem('companion') || (window.location.host ? 'http://' + window.location.host : 'http://localhost:8004');
 let promptPrefix = '] ';
 let pp = 0.0; // prompt processing
 let tg = 0.0; // text generation
@@ -26,8 +28,10 @@ marked.setOptions({
     }
   });
 
-log("SUSI.AI Chat v2");
-log("API Host: " + apihost);
+log("SUSI.AI Chat v2 - AI Chat and Terminal Emulator");
+log("Homepage: https://susi.ai");
+log("Git&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;: https://github.com/susiai/susi_chat");
+if (window.location.host !== 'susi.ai') log("API Host: " + apihost);
 log("Just Chat or type 'help' for a list of available commands");
 
 function initializeTerminal() {
@@ -39,7 +43,8 @@ function executeCommand(command) {
     switch (args[0]) {
         case 'help':
             if (args[1]) {
-                switch (args[1]) {
+                command = args[1].toLowerCase();
+                switch (command) {
                     case 'help':
                         log('help: help [command]');
                         log('    Display information about builtin commands.');
@@ -108,7 +113,11 @@ function executeCommand(command) {
                         log('Error: Invalid command');
                 }
             } else {
-                log('Available commands: help, reset, touch, mv, less, cat, ls, pwd, cd, mkdir, rmdir, tree, set, get, chop<br>' +
+                // Display general help and open link in other tab
+                log('This is a terminal for the <a href="https://github.com/susiai/susi_chat" target="_blank">SUSI.AI Chat v2.</a><br>' +
+                    'It is a simple terminal emulator with a virtual file system.<br>' +
+                    'You can either chat with the AI assistant or use the following commands:<br>' +
+                    'help, reset, touch, mv, less, cat, ls, pwd, cd, mkdir, rmdir, tree, set, get, chop<br>' +
                     'Type "help &lt;command&gt;" to get more information about a specific command');
             }
             break;
@@ -119,9 +128,18 @@ function executeCommand(command) {
             if (args[1]) {
                 apihost = args[1];
                 localStorage.setItem('apihost', apihost);
-                log('set api to ' + apihost);
+                log('set host api to ' + apihost);
             } else {
-                log('Error: Invalid attribute');
+                log('Host API : ' + apihost);
+            }
+            break;
+        case 'companion':
+            if (args[1]) {
+                companion = args[1];
+                localStorage.setItem('companion', companion);
+                log('set companion api to ' + companion);
+            } else {
+                log('Companion API: ' + companion);
             }
             break;
         case 'touch':
@@ -172,16 +190,39 @@ function executeCommand(command) {
                 log('Error: Invalid attribute');
             }
             break;
+        case 'curl':
+            // make a curl request to the given url
+            if (args[1]) {
+                let url = args[1];
+                // fetch with non-cors mode
+                let response = fetch(url, {mode: 'no-cors'});
+                if (response.ok) {
+                    let text = response.text();
+                    log(text);
+                } else {
+                    log('Error: ' + response.status);
+                }
+            } else {
+                log('Error: No URL given');
+            }
+            break;
         case 'chop':
             // remove the last communication question/anwser
             messagesLengthBefore = messages.length;
             terminalLengthBefore = terminal.childNodes.length;
             if (messagesLengthBefore > 1 && terminalLengthBefore >= 3) {
-                messages.pop();
+                messages.pop(); // removes last answer
+                messages.pop(); // removes last question
                 messagesLengthAfter = messages.length;
-                terminal.removeChild(terminal.lastChild);
-                terminal.removeChild(terminal.lastChild);
-                terminal.removeChild(terminal.lastChild);
+                terminal.removeChild(terminal.lastChild); // removes the already present new input terminal line
+                terminal.removeChild(terminal.lastChild); // removes last answer
+                node = terminal.removeChild(terminal.lastChild); // removes last question
+                // check if the last question was a chop command
+                if (node.textContent.startsWith(promptPrefix + 'chop')) {
+                    // if so, remove the last terminal line, which is the chop command
+                    terminal.removeChild(terminal.lastChild); // removes the chop answer
+                    terminal.removeChild(terminal.lastChild); // removes the chop command
+                }
                 terminalLengthAfter = terminal.childNodes.length;
                 log('message  size before chop: ' + messagesLengthBefore);
                 log('message  size after  chop: ' + messagesLengthAfter);
@@ -298,9 +339,13 @@ function executeCommand(command) {
             llm(command);
             break;
         case 'save':
-        case 'export':
+            // save the chat history or a code piece from the latest answer to a virtual file
+            break;
         case 'download':
-            // save the chat history to a file
+            // download a file from the virtual file system to a real file as download
+            break;
+        case 'export':
+            // export the chat history to a file
             filename = args[1] || 'chat.txt';
             mimetype = 'application/json';
             let datenow = new Date(); // make a date string and remove everything after the dot
@@ -352,6 +397,11 @@ function executeCommand(command) {
             URL.revokeObjectURL(url);
             log('Saving chat history to file ' + filename);
             break;
+        case 'second':
+            // we need to get the latest prompt from the chat history and send it to the llm
+            lastcommand = messages[messages.length - 2].content;
+            llm(lastcommand, targethost = companion);
+            break;
         default:
             // process the input command as prompt for the llm
             // in a special case, the command can be also empty, in which case we let the llm repond to it's latest statement
@@ -378,11 +428,72 @@ function executeCommand(command) {
                 messages.push({ role: "user", content: '' });
                 messages.push({ role: "assistant", content: assistantm });
             } else {
+                // check for a hint to generate a context: this is indicated by three tailing question marks "???" in the command
+                if (command.endsWith('???')) {
+                    // remove two question marks from the command
+                    command = command.slice(0, -3);
+                    originalCommand = command;
+                    // add another line to the command with the context generation prompt
+                    command += '\n\nDo not answer this question directly, instead collect facts and rules that can be used to answer this question.';
+                    llm(command);
+                    // now that the command has produced a context, read the last assistant message and use it as context in the command
+                    context = messages[messages.length - 1].content;
+                    // truncate the messages to the last user message because we want to answer the question now for real using the new context
+                    messages = messages.slice(0, -2);
+                    command = originalCommand + '\n\nUse the following information as context:\n\n' + context;
+                }
                 llm(command);
             }
             break;
     }
     scrollToBottom();
+}
+
+function chatHistory2parts(filename) {
+    if (!filename.includes('.')) filename += '.txt';
+    if (filename.endsWith('.doc')) filename = filename.replace('.doc', '.docx');
+    if (filename.endsWith('.json')) {
+        jsonString = JSON.stringify(messages, null, 2);
+        parts.push(jsonString);
+    } else if (filename.endsWith('.md') || filename.endsWith('.txt')) {
+        parts.push('# Chat log from ' + dateString + '\n\n');
+        for (let message of messages) {
+            parts.push('### ' + message.role + '\n' + message.content + '\n\n');
+        }
+    } else if (filename.endsWith('.csv')) {
+        parts.push('role;content\n');
+        for (let message of messages) {
+            parts.push(message.role + ';' + message.content + '\n');
+        }
+    } else if (filename.endsWith('.docx')) {
+        const doc = new docx.Document();
+        for (let message of messages) {
+            doc.addSection({properties: {},
+                children: [new docx.Paragraph({
+                    children: [new docx.TextRun(message.role + ': ' + message.content)]
+                })]
+            });
+        }
+        parts.push(new docx.Packer().toBuffer(doc));
+    } else {
+        log('Error: Invalid file extension');
+        return;
+    }
+    return parts;
+}
+
+function filename2mime(filename) {
+    ext = filename.split('.').pop();
+    if (ext === filename) return 'text/plain';
+    switch (ext) {
+        case 'json': return 'application/json';
+        case 'md':   return 'text/markdown';
+        case 'txt':  return 'text/plain';
+        case 'csv':  return 'text/csv';
+        case 'doc':
+        case 'docx': return 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+        default:     return 'application/octet-stream';
+    }
 }
 
 function bulletpoints() {
@@ -560,7 +671,7 @@ async function llma(systemprompt, context, prompt, temperature = 0.1, max_tokens
     });
 }
 
-async function llm(prompt, temperature = 0.1, max_tokens = 400) {
+async function llm(prompt, targethost = apihost, temperature = 0.1, max_tokens = 400) {
     messages.push({ role: "user", content: prompt });
     let terminalLine = document.createElement('div');
     terminalLine.classList.add('output');
@@ -571,7 +682,7 @@ async function llm(prompt, temperature = 0.1, max_tokens = 400) {
         model: "gpt-3.5-turbo-16k", temperature: temperature, max_tokens: max_tokens,
         messages: messages, stop: stoptokens, stream: true
     }
-    let response = await fetch(apihost + '/v1/chat/completions', {
+    let response = await fetch(targethost + '/v1/chat/completions', {
         method: "POST",
         headers: {"Content-Type": "application/json"},
         body: JSON.stringify(payload)
@@ -698,44 +809,41 @@ async function log(terminalText) {
 function initializeTerminal() {
     terminal.addEventListener('keydown', function (event) {
         // read the text entered in the terminal when the user hits the enter key, but distinguish enter with and without shift or ctrl:
-        if (event.key === 'Enter' && event.shiftKey) {
-            // the user has entered a new line into the input console using shift+enter
+        if (event.key === 'Enter') {
             event.preventDefault(); // Prevent default Enter behavior
-
-            // wen now just want to add a newline character to the last input line. There are several one and we want the last one
             const inputLines = terminal.querySelectorAll('.input-line');
             const inputLine = inputLines[inputLines.length - 1];
-
             if (inputLine) {
-                inputLine.innerHTML += '<br>\u200B'; // Insert <br> followed by a zero-width space
-                placeCaretAtEnd(inputLine);
+                if (event.shiftKey) {
+                    // the user has entered a new line into the input console using shift+enter
+                    inputLine.innerHTML += '<br>\u200B'; // Insert <br> followed by a zero-width space
+                    placeCaretAtEnd(inputLine);
+                } else {
+                    // user finished entering the command with the enter key
+                    inputText = inputLine.textContent.substring(promptPrefix.length);
+                    executeCommand(inputText.trim());
+                    lastInput = inputText;
+                    appendInputPrefix();
+                }
             }
-
-        } else if (event.key === 'Enter') {
-            // user finished entering the command with the enter key
-            event.preventDefault(); // Prevent default Enter behavior
-
-            const allText = terminal.textContent;
-            const inputText = allText.substring(allText.lastIndexOf(promptPrefix) + 1);
-            if (inputText.trim() !== lastInput.trim()) {
-                executeCommand(inputText.trim());
-                lastInput = inputText;
-            }
-            appendInputPrefix();
         }
+        
     });
     appendInputPrefix();
 }
 
+// add another input line to the terminal
 function appendInputPrefix() {
     const inputLine = document.createElement('div');
     inputLine.classList.add('input-line');
     inputLine.textContent = promptPrefix; // consider usage of block elements: https://www.unicode.org/charts/PDF/U2580.pdf
+    inputLine.contentEditable = true;
     terminal.appendChild(inputLine);
     placeCaretAtEnd(inputLine);
     scrollToBottom();
 }
 
+// place the caret at the end of the input line
 function placeCaretAtEnd(el) {
     el.focus();
     if (typeof window.getSelection != "undefined"
@@ -751,6 +859,7 @@ function placeCaretAtEnd(el) {
 
 function scrollToBottom() {
     terminal.scrollTop = terminal.scrollHeight;
+    terminal.scrollIntoView(false);
 }
 
 initializeTerminal();

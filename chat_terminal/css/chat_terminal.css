@@ -5,11 +5,13 @@ body, html {
     background-color: black;
     color: LawnGreen;
     overflow: hidden;
+    pointer-events: auto;
+    user-select: auto;
 }
 
 a, a:visited {
-    text-decoration: none;
     color: inherit;
+    position: relative; z-index: 1;
 }
 
 #terminal {
@@ -26,7 +28,11 @@ a, a:visited {
 .input-line {
     white-space: pre-wrap;
     min-height: 20px;
+    background-color: black;
     color: LawnGreen;
+    border: none;
+    outline: none;
+    white-space: pre-wrap; /* Allows line breaks */
 }
 
 .output {
