@@ -1,0 +1,108 @@
+<html>
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VFS Test</title>
+    <style>
+      #output {
+        white-space: pre-wrap;
+        word-wrap: break-word;
+        font-family: monospace;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Virtual File System Test</h1>
+    <pre id="output"></pre>
+    <script src="vfs.js"></script>
+    <script>
+      const output = document.getElementById('output');
+
+      async function test() {
+        try {
+
+          // Test touch
+          vfs.touch('/test/file.txt');
+          output.innerText += 'touch /test/file.txt\n';
+          output.innerText += `ls /test/:\n  ${(await vfs.ls('/test/')).join('\n  ')}\n`;
+
+          // Test get
+          output.innerText += `get /test/file.txt: ${await vfs.get('/test/file.txt')}\n`;
+
+          // Test put
+          vfs.put('/test/file.txt', 'Hello, world!');
+          output.innerText += 'put /test/file.txt "Hello, world!"\n';
+          output.innerText += `ls /test/:\n  ${(await vfs.ls('/test/')).join('\n  ')}\n`;
+
+          // Test get after put
+          output.innerText += `get /test/file.txt: ${await vfs.get('/test/file.txt')}\n`;
+
+          // Test cp
+          vfs.cp('/test/file.txt', '/test/file_copy.txt');
+          output.innerText += 'cp /test/file.txt /test/file_copy.txt\n';
+          output.innerText += `ls /test/:\n  ${(await vfs.ls('/test/')).join('\n  ')}\n`;
+
+          // Test get after cp
+          output.innerText += `get /test/file_copy.txt: ${await vfs.get('/test/file_copy.txt')}\n`;
+
+          // Test mv
+          vfs.mv('/test/file.txt', '/test/file_renamed.txt');
+          output.innerText += 'mv /test/file.txt /test/file_renamed.txt\n';
+          output.innerText += `ls /test/:\n  ${(await vfs.ls('/test/')).join('\n  ')}\n`;
+
+          // Test get after mv
+          output.innerText += `get /test/file_renamed.txt: ${await vfs.get('/test/file_renamed.txt')}\n`;
+
+          // Test find
+          vfs.find('file');
+          output.innerText += 'find file\n';
+          await new Promise(resolve => setTimeout(resolve, 100));
+
+          // Test du
+          const duResult = await vfs.du();
+          output.innerText += `du: ${duResult}\n`;
+          await new Promise(resolve => setTimeout(resolve, 100));
+
+          // Test df
+          const dfResult = await vfs.df();
+          output.innerText += `df: ${dfResult}\n`;
+          await new Promise(resolve => setTimeout(resolve, 100));
+
+          // Test grep
+          vfs.touch('/test/grep_test.txt');
+          vfs.put('/test/grep_test.txt', 'Hello, world! This is a test file.');
+          output.innerText += `ls /test/:\n  ${(await vfs.ls('/test/')).join('\n  ')}\n`;
+          await new Promise(resolve => setTimeout(resolve, 100));
+
+          vfs.grep('/test/grep_test.txt', 'world');
+          output.innerText += 'grep world in /test/grep_test.txt\n';
+          await new Promise(resolve => setTimeout(resolve, 100));
+
+          // Test rm
+          vfs.rm('/test/file_copy.txt');
+          vfs.rm('/test/file_renamed.txt');
+          vfs.rm('/test/grep_test.txt');
+          output.innerText += 'rm /test/file_copy.txt\n';
+          output.innerText += `ls /test/:\n  ${(await vfs.ls('/test/')).join('\n  ')}\n`;
+
+          // Test get after rm
+          try {
+            await vfs.get('/test/file_copy.txt');
+            throw new Error('File should not exist after rm');
+          } catch (error) {
+            output.innerText += `get /test/file_copy.txt (should fail): ${error}\n`;
+          }
+
+          output.innerText += 'All tests completed!\n';
+        } catch (error) {
+          output.innerText += `Error: ${error}\n`;
+        }
+      }
+
+      // Run the test function after a short delay to ensure the vfs object is initialized
+      setTimeout(() => {
+        test();
+      }, 100);
+    </script>
+  </body>
+</html>
