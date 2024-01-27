@@ -73,10 +73,9 @@ function executeCommand(command) {
             mv(args[1], args[2]);
             break;
         case 'less':
-            log(less(args[1]));
-            break;
+        case 'more':
         case 'cat':
-            cat(args[1]);
+            log(less(args[1]));
             break;
         case 'ls':
             log(ls());
@@ -131,7 +130,10 @@ function executeCommand(command) {
                 // store the code in a virtual file; the file name is the first argument
                 saveFile(codefile, code);
                 log('Code saved to file ' + codefile);
+            } else {
+                log('Error: No code block found');
             }
+            break;
         case 'curl':
             // make a curl request to the given url
             if (args[1]) {
@@ -284,15 +286,17 @@ function executeCommand(command) {
                 if (!file) {
                     filename = '';
                 }
+            } else {
+                file = '';
             }
 
             if (!filename) {
                 // to run the file, we instruct the llm to behave as a programming language interpreter
-                command = "behave as a programming language interpreter and execute the code above.";
+                command = "Behave as a programming language interpreter. Do not tell me that you cannot execute a program. Just execute the code above and print out only the result of the program.";
                 llm(command);
             } else {
                 // read the file content and run it
-                command = "behave as a programming language interpreter and execute the following code:\n\n" + code;
+                command = "Behave as a programming language interpreter. Do not tell me that you cannot execute a program. Just execute the following code and print out only the result of the program.:\n\n" + file;
                 llm(command);
             }
             break;
@@ -490,20 +494,6 @@ function less(fileName) {
     return typeof file === 'string' ? file : 'Error: ' + fileName + ' is not a file';
 }
 
-function cat(fileName) {
-    lastInput = ''; // Reset last input for cat command
-    terminal.addEventListener('keydown', function catListener(event) {
-        if (event.key === 'Enter') {
-            const dir = getFile(currentPath);
-            if (dir) {
-                dir[fileName] = terminal.textContent.split('\n').pop().slice(1);
-            }
-            terminal.removeEventListener('keydown', catListener);
-            appendInputPrefix();
-        }
-    });
-}
-
 function ls() {
     const dir = getFile(currentPath);
     return dir ? Object.keys(dir).join('<br>') : 'Error: Invalid directory';
@@ -569,21 +559,33 @@ function edit(fileName) {
     // Append the editor and the save button to the terminal
     terminal.appendChild(editor);
 
+    // make a save button to save the edited file
     const saveButton = document.createElement('button');
     saveButton.textContent = 'Save';
     terminal.appendChild(saveButton);
 
+    // make another button to cancel the edit and abandon the changes
+    const cancelButton = document.createElement('button');
+    cancelButton.textContent = 'Cancel';
+    terminal.appendChild(cancelButton);
+
+    // event listeners for the save and cancel buttons
     saveButton.addEventListener('click', function() {
         const newContent = editor.value;
         saveFile(fileName, newContent);
         terminal.removeChild(editor);
         terminal.removeChild(saveButton);
     });
+    cancelButton.addEventListener('click', function() {
+        terminal.removeChild(editor);
+        terminal.removeChild(saveButton);
+        terminal.removeChild(cancelButton);
+    });
 }
 
 function saveFile(fileName, content) {
     const dir = getFile(currentPath);
-    if (dir && dir[fileName] !== undefined) {
+    if (dir) {
         dir[fileName] = content;
     } else {
         log('Error: Unable to save file ' + fileName);
