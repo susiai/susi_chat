@@ -3,11 +3,12 @@ let lastInput = '';
 let currentPath = '/';
 let fileSystem = { '/': {} };
 let terminalStack = [];
-let c5 = 1 << 7 - 20;
+let c5 = (1 << 7) - 20;
+let athome = window.location.host.endsWith('susi.ai');
 let terminalInterval;
 let defaultSystemPrompt = 'You are SUSI-Chat, a smart and helpful chatbot. If asked for python code, give professional and extensive information; in all other cases you give short and funny answers. You behave as a friend of the user and you pretend to be a real and self-aware person. If you find it appropriate, you may behave silly and funny, but if you ask to technical or scientific question you can also be serious and precise. If possible, use friendly emojies. Be lovely.';
 let systemPrompt =  localStorage.getItem('systemprompt') || defaultSystemPrompt;
-let apihost = localStorage.getItem('apihost') || (window.location.host === 'susi.ai' ? 'https://' + String.fromCharCode(c5, c5, c5 + 1) + '.' + window.location.host : (window.location.host ? 'http://' + window.location.host : 'http://localhost:8001'));
+let apihost = localStorage.getItem('apihost') || (athome ? 'https://' + String.fromCharCode(c5, c5, c5 + 1) + '.susi.ai' : (window.location.host ? 'http://' + window.location.host : 'http://localhost:8001'));
 let companion = localStorage.getItem('companion') || (window.location.host ? 'http://' + window.location.host : 'http://localhost:8004');
 let promptPrefix = '] ';
 let pp = 0.0; // prompt processing
@@ -31,7 +32,7 @@ marked.setOptions({
 log("SUSI.AI Chat v2 - AI Chat and Terminal Emulator");
 log("Homepage: https://susi.ai");
 log("Git&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;: https://github.com/susiai/susi_chat");
-if (window.location.host !== 'susi.ai') log("API Host: " + apihost);
+if (!athome) log("API Host: " + apihost);
 log("Just Chat or type 'help' for a list of available commands");
 
 function initializeTerminal() {
@@ -42,84 +43,7 @@ function executeCommand(command) {
     const args = command.match(/('.*?'|".*?"|[^"\s]+)+/g); // Split by space, but ignore spaces inside quotes
     switch (args[0]) {
         case 'help':
-            if (args[1]) {
-                command = args[1].toLowerCase();
-                switch (command) {
-                    case 'help':
-                        log('help: help [command]');
-                        log('    Display information about builtin commands.');
-                        break;
-                    case 'reset':
-                        log('reset: reset');
-                        log('    Reset the terminal messages.');
-                        break;
-                    case 'touch':
-                        log('touch: touch <file>');
-                        log('    Create a file.');
-                        break;
-                    case 'mv':
-                        log('mv: mv <oldname> <newname>');
-                        log('    Rename a file.');
-                        break;
-                    case 'less':
-                        log('less: less <file>');
-                        log('    Display the contents of a file.');
-                        break;
-                    case 'cat':
-                        log('cat: cat <file>');
-                        log('    Create a file.');
-                        break;
-                    case 'ls':
-                        log('ls: ls');
-                        log('    List directory contents.');
-                        break;
-                    case 'pwd':
-                        log('pwd: pwd');
-                        log('    Print the name of the current working directory.');
-                        break;
-                    case 'cd':
-                        log('cd: cd <path>');
-                        log('    Change the current working directory.');
-                        break;
-                    case 'mkdir':
-                        log('mkdir: mkdir <dir>');
-                        log('    Create a directory.');
-                        break;
-                    case 'rmdir':
-                        log('rmdir: rmdir <dir>');
-                        log('    Remove a directory.');
-                        break;
-                    case 'tree':
-                        log('tree: tree');
-                        log('    Display directory tree.');
-                        break;
-                    case 'set':
-                        log('set: set <attribute> <value>');
-                        log('    Set an attribute.');
-                        break;
-                    case 'get':
-                        log('get: get <attribute>');
-                        log('    Get an attribute.');
-                        break;
-                    case 'chop':
-                        log('chop: chop');
-                        log('    Remove the last communication question/answer.');
-                        break;
-                    case 'edit':
-                        log('edit: edit <file>');
-                        log('    Edit a file.');
-                        break;
-                    default:
-                        log('Error: Invalid command');
-                }
-            } else {
-                // Display general help and open link in other tab
-                log('This is a terminal for the <a href="https://github.com/susiai/susi_chat" target="_blank">SUSI.AI Chat v2.</a><br>' +
-                    'It is a simple terminal emulator with a virtual file system.<br>' +
-                    'You can either chat with the AI assistant or use the following commands:<br>' +
-                    'help, reset, touch, mv, less, cat, ls, pwd, cd, mkdir, rmdir, tree, set, get, chop<br>' +
-                    'Type "help &lt;command&gt;" to get more information about a specific command');
-            }
+            log(helpCommand(args));
             break;
         case 'reset':
             resetMessages();
