@@ -114,6 +114,24 @@ function executeCommand(command) {
                 log('Error: Invalid attribute');
             }
             break;
+        case 'make':
+            // check if there is a second argument
+            if (args[1]) {
+                codefile = args[1];
+            } else {
+                codefile = 'code.py';
+            }
+            // get the code frament from the last assistant message
+            let code = messages[messages.length - 1].content;
+            // extract the code which is denoted as markdown code block
+            let codeblock = code.match(/```[^`]+```/g);
+            if (codeblock) {
+                // remove the code block markers and trim the code
+                code = codeblock[0].replace(/```/g, '').trim();
+                // store the code in a virtual file; the file name is the first argument
+                saveFile(codefile, code);
+                log('Code saved to file ' + codefile);
+            }
         case 'curl':
             // make a curl request to the given url
             if (args[1]) {
@@ -258,9 +276,25 @@ function executeCommand(command) {
             break;
         case 'run':
             // we want to execute a program given earlier in the terminal
-            // to do so, we instruct the llm to behave as a programming language interpreter
-            command = "behave as a programming language interpreter and execute the code above.";
-            llm(command);
+            // check if a file name is given as second argument; if not, set the filename to ''
+            filename = args[1] || '';
+            if (filename) {
+                // check if the file exists
+                file = getFile(currentPath + filename);
+                if (!file) {
+                    filename = '';
+                }
+            }
+
+            if (!filename) {
+                // to run the file, we instruct the llm to behave as a programming language interpreter
+                command = "behave as a programming language interpreter and execute the code above.";
+                llm(command);
+            } else {
+                // read the file content and run it
+                command = "behave as a programming language interpreter and execute the following code:\n\n" + code;
+                llm(command);
+            }
             break;
         case 'save':
             // save the chat history or a code piece from the latest answer to a virtual file
