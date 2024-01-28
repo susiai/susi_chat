@@ -96,9 +96,11 @@ function executeCommand(command) {
             log(tree(fileSystem, '', ''));
             break;
         case 'edit':
+            if (args.length > 2) {llm(command);break;} // could be a normal sentence
             edit(args[1]);
             break;
         case 'set':
+            if (args.length > 3) {llm(command);break;} // could be a normal sentence
             if (args[1] === 'api' && args[2]) {
                 apihost = args[2];
                 log('set api to ' + apihost);
@@ -107,6 +109,7 @@ function executeCommand(command) {
             }
             break;
         case 'get':
+            if (args.length > 2) {llm(command);break;} // could be a normal sentence
             if (args[1] === 'api') {
                 log(apihost);
             } else {
@@ -114,6 +117,7 @@ function executeCommand(command) {
             }
             break;
         case 'make':
+            if (args.length > 2) {llm(command);break;} // could be a normal sentence
             // check if there is a second argument
             if (args[1]) {
                 codefile = args[1];
