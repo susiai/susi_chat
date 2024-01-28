@@ -61,14 +61,9 @@ async function getTokenLength(prompt) {
 }
 
 let n_keep = 0;
-(async () => {
-    n_keep = await getTokenLength(defaultSystemPrompt);
-})();
-
-// if n_keep is > 0, warm up the model
-if (n_keep > 0) {
-    llm('', n_keep0 = 0);
-}
+//(async () => {n_keep = await getTokenLength(defaultSystemPrompt);})();
+//if (n_keep > 0) {llm('', n_keep0 = 0);}
+(async () => {await llm_warmup();})();
 
 function executeCommand(command) {
     const args = command.match(/('.*?'|".*?"|[^"\s]+)+/g); // Split by space, but ignore spaces inside quotes
@@ -666,7 +661,7 @@ async function llma(systemprompt, context, prompt, temperature = 0.1, max_tokens
     });
 }
 
-async function llm(prompt, targethost = apihost, temperature = 0.1, max_tokens = 400, n_keep0 = n_keep) {
+async function llm(prompt, targethost = apihost, temperature = 0.1, max_tokens = 400) {
     messages.push({ role: "user", content: prompt });
     let terminalLine = document.createElement('div');
     terminalLine.classList.add('output');
@@ -674,7 +669,7 @@ async function llm(prompt, targethost = apihost, temperature = 0.1, max_tokens =
     terminal.appendChild(terminalLine);
 
     payload = {
-        model: "gpt-3.5-turbo-16k", temperature: temperature, max_tokens: max_tokens, n_keep: n_keep0,
+        model: "gpt-3.5-turbo-16k", temperature: temperature, max_tokens: max_tokens, n_keep: n_keep,
         messages: messages, stop: stoptokens, stream: true
     }
     let response = await fetch(targethost + '/v1/chat/completions', {
@@ -752,6 +747,39 @@ async function llm(prompt, targethost = apihost, temperature = 0.1, max_tokens =
             }
         }
         return text;
+    }
+}
+
+async function llm_warmup(targethost = apihost, temperature = 0.1, max_tokens = 400) {
+    let m = [{
+        role: 'system',
+        content: defaultSystemPrompt
+    }];
+    payload = {
+        model: "gpt-3.5-turbo-16k", temperature: temperature, max_tokens: max_tokens, n_keep: 0,
+        messages: m, stop: stoptokens
+    }
+    let response = await fetch(targethost + '/v1/chat/completions', {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify(payload)
+    });
+
+    if (response.ok) {
+        data = await response.json();
+        // get answer
+        answer = data.choices[0].message.content
+
+        // get usage metrics
+        usage = data.usage;
+        completion_tokens = usage.completion_tokens; // 203
+        prompt_tokens = usage.prompt_tokens; // 106
+        total_tokens= usage.total_tokens; // 309
+        // set keep tokens
+        n_keep = prompt_tokens;
+        const reader = response.body.getReader();
+    } else {
+        return null;
     }
 }
 
