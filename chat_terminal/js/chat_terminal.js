@@ -39,6 +39,37 @@ function initializeTerminal() {
     // [Event listener code remains unchanged]
 }
 
+// call the embeddings api to get the length of the tokenized prompt
+async function getTokenLength(prompt) {
+    const payload = { input: prompt };
+    let response = await fetch(apihost + '/v1/embeddings', {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify(payload)
+    });
+
+    // Use response.json() to parse the JSON response body
+    data = await response.json();
+    data = data.data;
+    if (Array.isArray(data) && data.length > 0) {
+        const data0 = data[0];
+        if (data0.embedding) {
+            return data0.embedding.length;
+        }
+    }
+    return 0;
+}
+
+let n_keep = 0;
+(async () => {
+    n_keep = await getTokenLength(defaultSystemPrompt);
+})();
+
+// if n_keep is > 0, warm up the model
+if (n_keep > 0) {
+    llm('', n_keep0 = 0);
+}
+
 function executeCommand(command) {
     const args = command.match(/('.*?'|".*?"|[^"\s]+)+/g); // Split by space, but ignore spaces inside quotes
     switch (args[0]) {
@@ -237,7 +268,7 @@ function executeCommand(command) {
             log('Team ' + teamname + ' defined with agents: ' + teamagents);
             break;
         case 'performance':
-            log('<pre>pp: ' + pp + ' ms<br>tg: ' + tg + ' t/s</pre>');
+            log('<pre>pp: ' + pp + ' ms<br>tg: ' + tg + ' t/s<br>n_keep: ' + n_keep + '</pre>');
             break;
         case 'mem':
             // check if the second argument is 'clear', in which case we clear the memory
@@ -635,7 +666,7 @@ async function llma(systemprompt, context, prompt, temperature = 0.1, max_tokens
     });
 }
 
-async function llm(prompt, targethost = apihost, temperature = 0.1, max_tokens = 400) {
+async function llm(prompt, targethost = apihost, temperature = 0.1, max_tokens = 400, n_keep0 = n_keep) {
     messages.push({ role: "user", content: prompt });
     let terminalLine = document.createElement('div');
     terminalLine.classList.add('output');
@@ -643,7 +674,7 @@ async function llm(prompt, targethost = apihost, temperature = 0.1, max_tokens =
     terminal.appendChild(terminalLine);
 
     payload = {
-        model: "gpt-3.5-turbo-16k", temperature: temperature, max_tokens: max_tokens,
+        model: "gpt-3.5-turbo-16k", temperature: temperature, max_tokens: max_tokens, n_keep: n_keep0,
         messages: messages, stop: stoptokens, stream: true
     }
     let response = await fetch(targethost + '/v1/chat/completions', {
