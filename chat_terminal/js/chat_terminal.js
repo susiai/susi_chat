@@ -13,7 +13,7 @@ let companion = localStorage.getItem('companion') || (window.location.host ? 'ht
 let promptPrefix = '] ';
 let pp = 0.0; // prompt processing
 let tg = 0.0; // text generation
-let stoptokens = ["[/INST]", "<|im_end|>"];
+let stoptokens = ["[/INST]", "<|im_end|>", "<|end_of_turn|>"];
 let messages = [];
 terminalStack = [];
 resetMessages();
@@ -670,6 +670,8 @@ async function llm(prompt, targethost = apihost, temperature = 0.1, max_tokens =
 
     payload = {
         model: "gpt-3.5-turbo-16k", temperature: temperature, max_tokens: max_tokens, n_keep: n_keep,
+        //repeat_penalty: 1.0,
+        penalize_nl: false, // see https://huggingface.co/google/gemma-7b-it/discussions/38#65d7b14adb51f7c160769fa1
         messages: messages, stop: stoptokens, stream: true
     }
     let response = await fetch(targethost + '/v1/chat/completions', {
