@@ -63,7 +63,7 @@ async function getTokenLength(prompt) {
 let n_keep = 0;
 //(async () => {n_keep = await getTokenLength(defaultSystemPrompt);})();
 //if (n_keep > 0) {llm('', n_keep0 = 0);}
-(async () => {await llm_warmup();})();
+//(async () => {await llm_warmup();})();
 
 function executeCommand(command) {
     const args = command.match(/('.*?'|".*?"|[^"\s]+)+/g); // Split by space, but ignore spaces inside quotes
