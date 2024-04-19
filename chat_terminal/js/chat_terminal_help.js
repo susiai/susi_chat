@@ -1,7 +1,7 @@
 // Help System
 
 const helpMessages = {
-    '_'      : 'This is a terminal for the &lt;a href="https://github.com/susiai/susi_chat" target="_blank">SUSI.AI Chat v2.</a>\n\n' +
+    '_'      : 'This is a terminal for the <a href="https://github.com/susiai/susi_chat" target="_blank">SUSI.AI Chat v2.</a>\n\n' +
                 'It is a simple terminal emulator with a virtual file system.\n\n' +
                 'You can either chat with the AI assistant or use the following commands:\n\n' +
                 'help, reset, touch, mv, less, cat, ls, pwd, cd, mkdir, rmdir, tree, set, get, chop\n\n' +
