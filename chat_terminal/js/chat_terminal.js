@@ -13,13 +13,14 @@ let companion = localStorage.getItem('companion') || (window.location.host ? 'ht
 let promptPrefix = '] ';
 let pp = 0.0; // prompt processing
 let tg = 0.0; // text generation
-let stoptokens = ["[/INST]", "<|im_end|>", "<|end_of_turn|>"];
+let stoptokens = ["[/INST]", "<|im_end|>", "<|end_of_turn|>", "<|eot_id|>", "<|end_header_id|>", "<EOS_TOKEN>", "</s>"];
 let messages = [];
 terminalStack = [];
 resetMessages();
 const stringsToRemove = [
     "[INST]", "<<USER>>", "<</INST>>", "<<SYS>>", "</SYS>>",
-    "<|im_start|>system", "<|im_start|>user", "<|im_start|>assistant", "<|im_start|>"];
+    "<|im_start|>system", "<|im_start|>user", "<|im_start|>assistant", "<|im_start|>",
+    "<|start_header_id|>user", "<|start_header_id|>system", "<|start_header_id|>assistant"];
 hljs.highlightAll();
 marked.setOptions({
     langPrefix: 'language-',
@@ -643,7 +644,7 @@ function resetMessages() {
 }
 
 // make a synchronous call to the llm without a history, just a context
-async function llma(systemprompt, context, prompt, temperature = 0.1, max_tokens = 400) {
+async function llma(systemprompt, context, prompt, temperature = 0.1, max_tokens = 400, set_n_keep = false) {
     m = [
         {role: 'system', content: systemprompt},
         {role: "user", content: context},
@@ -659,6 +660,20 @@ async function llma(systemprompt, context, prompt, temperature = 0.1, max_tokens
         headers: {"Content-Type": "application/json"},
         body: JSON.stringify(payload)
     });
+
+    if (response.ok) {
+        data = await response.json();
+        answer = data.choices[0].message.content
+    
+        if (set_n_keep) {
+            // set keep tokens
+            usage = data.usage;
+            n_keep = usage.prompt_tokens;
+        }
+        const reader = response.body.getReader();
+    } else {
+        return null;
+    }
 }
 
 async function llm(prompt, targethost = apihost, temperature = 0.1, max_tokens = 400) {
@@ -669,9 +684,9 @@ async function llm(prompt, targethost = apihost, temperature = 0.1, max_tokens =
     terminal.appendChild(terminalLine);
 
     payload = {
-        model: "gpt-3.5-turbo-16k", temperature: temperature, max_tokens: max_tokens, n_keep: n_keep,
+        model: "gpt-3.5-turbo-16k", temperature: temperature, max_tokens: max_tokens, //n_keep: n_keep,
         //repeat_penalty: 1.0,
-        penalize_nl: false, // see https://huggingface.co/google/gemma-7b-it/discussions/38#65d7b14adb51f7c160769fa1
+        //penalize_nl: false, // see https://huggingface.co/google/gemma-7b-it/discussions/38#65d7b14adb51f7c160769fa1
         messages: messages, stop: stoptokens, stream: true
     }
     let response = await fetch(targethost + '/v1/chat/completions', {
