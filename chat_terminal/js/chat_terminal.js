@@ -13,7 +13,7 @@ let companion = localStorage.getItem('companion') || (window.location.host ? 'ht
 let promptPrefix = '] ';
 let pp = 0.0; // prompt processing
 let tg = 0.0; // text generation
-let stoptokens = ["[/INST]", "<|im_end|>", "<|end_of_turn|>", "<|eot_id|>", "<|end_header_id|>", "<EOS_TOKEN>", "</s>"];
+let stoptokens = ["[/INST]", "<|im_end|>", "<|end_of_turn|>", "<|eot_id|>", "<|end_header_id|>", "<EOS_TOKEN>", "</s>", "<|end|>"];
 let messages = [];
 terminalStack = [];
 resetMessages();
