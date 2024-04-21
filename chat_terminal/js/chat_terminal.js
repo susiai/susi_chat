@@ -9,6 +9,7 @@ let terminalInterval;
 let defaultSystemPrompt = 'You are SUSI-Chat, a smart and helpful chatbot. If asked for python code, give professional and extensive information; in all other cases you give short and funny answers. You behave as a friend of the user and you pretend to be a real and self-aware person. If you find it appropriate, you may behave silly and funny, but if you ask to technical or scientific question you can also be serious and precise. If possible, use friendly emojies. Be lovely.';
 let systemPrompt =  localStorage.getItem('systemprompt') || defaultSystemPrompt;
 let apihost = localStorage.getItem('apihost') || (athome ? 'https://' + String.fromCharCode(c5, c5, c5 + 1) + '.susi.ai' : (window.location.host ? 'http://' + window.location.host : 'http://localhost:8001'));
+let model = localStorage.getItem('model') || 'gpt-3.5-turbo-16k';
 let companion = localStorage.getItem('companion') || (window.location.host ? 'http://' + window.location.host : 'http://localhost:8004');
 let promptPrefix = '] ';
 let pp = 0.0; // prompt processing
@@ -82,6 +83,15 @@ function executeCommand(command) {
                 log('set host api to ' + apihost);
             } else {
                 log('Host API : ' + apihost);
+            }
+            break;
+        case 'model':
+            if (args[1]) {
+                model = args[1];
+                localStorage.setItem('model', model);
+                log('set model to ' + model);
+            } else {
+                log('model : ' + model);
             }
             break;
         case 'companion':
@@ -652,7 +662,7 @@ async function llma(systemprompt, context, prompt, temperature = 0.1, max_tokens
         {role: "user", content: prompt}
     ];
     payload = {
-        model: "gpt-3.5-turbo-16k", temperature: temperature, max_tokens: max_tokens,
+        model: model, temperature: temperature, max_tokens: max_tokens,
         messages: m, stop: stoptokens, stream: false
     }
     let response = await fetch(apihost + '/v1/chat/completions', {
@@ -684,7 +694,7 @@ async function llm(prompt, targethost = apihost, temperature = 0.1, max_tokens =
     terminal.appendChild(terminalLine);
 
     payload = {
-        model: "gpt-3.5-turbo-16k", temperature: temperature, max_tokens: max_tokens, //n_keep: n_keep,
+        model: model, temperature: temperature, max_tokens: max_tokens, //n_keep: n_keep,
         //repeat_penalty: 1.0,
         //penalize_nl: false, // see https://huggingface.co/google/gemma-7b-it/discussions/38#65d7b14adb51f7c160769fa1
         messages: messages, stop: stoptokens, stream: true
@@ -773,7 +783,7 @@ async function llm_warmup(targethost = apihost, temperature = 0.1, max_tokens = 
         content: defaultSystemPrompt
     }];
     payload = {
-        model: "gpt-3.5-turbo-16k", temperature: temperature, max_tokens: max_tokens, n_keep: 0,
+        model: model, temperature: temperature, max_tokens: max_tokens, n_keep: 0,
         messages: m, stop: stoptokens
     }
     let response = await fetch(targethost + '/v1/chat/completions', {
