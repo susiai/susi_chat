@@ -16,7 +16,10 @@ let tg = 0.0; // text generation
 let stoptokens = ["[/INST]", "<|im_end|>", "<|end_of_turn|>", "<|eot_id|>", "<|end_header_id|>", "<EOS_TOKEN>", "</s>", "<|end|>"];
 let messages = [];
 terminalStack = [];
+let maxTokens = 600;
+
 resetMessages();
+
 const stringsToRemove = [
     "[INST]", "<<USER>>", "<</INST>>", "<<SYS>>", "</SYS>>",
     "<|im_start|>system", "<|im_start|>user", "<|im_start|>assistant", "<|im_start|>",
@@ -84,6 +87,14 @@ function executeCommand(command) {
                 log('Host API : ' + apihost);
             }
             break;
+        case 'max_tokens':
+            if (args[1]) {
+                maxTokens = Number(args[1]);
+                log('set max_tokens to ' + maxTokens);
+            } else {
+                log('max_tokens : ' + maxTokens);
+            }
+            break;
         case 'companion':
             if (args[1]) {
                 companion = args[1];
@@ -123,11 +134,11 @@ function executeCommand(command) {
             log(tree(fileSystem, '', ''));
             break;
         case 'edit':
-            if (args.length > 2) {llm(command);break;} // could be a normal sentence
+            if (args.length > 2) {llm(command, targethost = apihost, max_tokens = maxTokens); break;} // could be a normal sentence
             edit(args[1]);
             break;
         case 'set':
-            if (args.length > 3) {llm(command);break;} // could be a normal sentence
+            if (args.length > 3) {llm(command, targethost = apihost, max_tokens = maxTokens); break;} // could be a normal sentence
             if (args[1] === 'api' && args[2]) {
                 apihost = args[2];
                 log('set api to ' + apihost);
@@ -136,7 +147,7 @@ function executeCommand(command) {
             }
             break;
         case 'get':
-            if (args.length > 2) {llm(command);break;} // could be a normal sentence
+            if (args.length > 2) {llm(command, targethost = apihost, max_tokens = maxTokens); break;} // could be a normal sentence
             if (args[1] === 'api') {
                 log(apihost);
             } else {
@@ -144,7 +155,7 @@ function executeCommand(command) {
             }
             break;
         case 'make':
-            if (args.length > 2) {llm(command);break;} // could be a normal sentence
+            if (args.length > 2) {llm(command, targethost = apihost, max_tokens = maxTokens); break;} // could be a normal sentence
             // check if there is a second argument
             if (args[1]) {
                 codefile = args[1];
@@ -324,11 +335,11 @@ function executeCommand(command) {
             if (!filename) {
                 // to run the file, we instruct the llm to behave as a programming language interpreter
                 command = "Behave as a programming language interpreter. Do not tell me that you cannot execute a program. Just execute the code above and print out only the result of the program.";
-                llm(command);
+                llm(command, targethost = apihost, max_tokens = maxTokens);
             } else {
                 // read the file content and run it
                 command = "Behave as a programming language interpreter. Do not tell me that you cannot execute a program. Just execute the following code and print out only the result of the program.:\n\n" + file;
-                llm(command);
+                llm(command, targethost = apihost, max_tokens = maxTokens);
             }
             break;
         case 'save':
@@ -393,7 +404,7 @@ function executeCommand(command) {
         case 'second':
             // we need to get the latest prompt from the chat history and send it to the llm
             lastcommand = messages[messages.length - 2].content;
-            llm(lastcommand, targethost = companion);
+            llm(lastcommand, targethost = companion, max_tokens = maxTokens);
             break;
         default:
             // process the input command as prompt for the llm
@@ -415,7 +426,7 @@ function executeCommand(command) {
 
                 messages_bkp = messages;
                 messages = messages_transposed;
-                llm(assistantm.content);
+                llm(assistantm.content, targethost = apihost, max_tokens = maxTokens);
                 assistantm = messages.pop().content;
                 messages = messages_bkp;
                 messages.push({ role: "user", content: '' });
@@ -428,14 +439,14 @@ function executeCommand(command) {
                     originalCommand = command;
                     // add another line to the command with the context generation prompt
                     command += '\n\nDo not answer this question directly, instead collect facts and rules that can be used to answer this question.';
-                    llm(command);
+                    llm(command, targethost = apihost, max_tokens = maxTokens);
                     // now that the command has produced a context, read the last assistant message and use it as context in the command
                     context = messages[messages.length - 1].content;
                     // truncate the messages to the last user message because we want to answer the question now for real using the new context
                     messages = messages.slice(0, -2);
                     command = originalCommand + '\n\nUse the following information as context:\n\n' + context;
                 }
-                llm(command);
+                llm(command, targethost = apihost, max_tokens = maxTokens);
             }
             break;
     }
@@ -676,7 +687,7 @@ async function llma(systemprompt, context, prompt, temperature = 0.1, max_tokens
     }
 }
 
-async function llm(prompt, targethost = apihost, temperature = 0.1, max_tokens = 400) {
+async function llm(prompt, targethost = apihost, max_tokens = 400, temperature = 0.1) {
     messages.push({ role: "user", content: prompt });
     let terminalLine = document.createElement('div');
     terminalLine.classList.add('output');
