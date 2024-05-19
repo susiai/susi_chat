@@ -45,24 +45,31 @@ function initializeTerminal() {
 }
 
 // call the embeddings api to get the length of the tokenized prompt
-async function getTokenLength(prompt) {
+function getTokenLength(prompt) {
     const payload = { input: prompt };
-    let response = await fetch(apihost + '/v1/embeddings', {
-        method: "POST",
-        headers: {"Content-Type": "application/json"},
-        body: JSON.stringify(payload)
-    });
 
-    // Use response.json() to parse the JSON response body
-    data = await response.json();
-    data = data.data;
-    if (Array.isArray(data) && data.length > 0) {
-        const data0 = data[0];
-        if (data0.embedding) {
-            return data0.embedding.length;
+    return fetch(apihost + '/v1/embeddings', {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+    })
+    .then(response => {
+        return response.json();
+    })
+    .then(data => {
+        data = data.data;
+        if (Array.isArray(data) && data.length > 0) {
+            const data0 = data[0];
+            if (data0.embedding) {
+                return data0.embedding.length;
+            }
         }
-    }
-    return 0;
+        return 0;
+    })
+    .catch(error => {
+        console.error(error.message);
+        return 0;
+    });
 }
 
 let n_keep = 0;
@@ -190,6 +197,7 @@ function executeCommand(command) {
         case 'curl':
             // make a curl request to the given url
             if (args[1]) {
+                log(''); // needed because fetch is asynchronous
                 let url = args[1];
                 fetch(url)
                     .then(response => {
@@ -210,6 +218,7 @@ function executeCommand(command) {
             if (args[1]) {
                 let command = args[1];
                 if (command === 'ls') {
+                    log(''); // needed because fetch is asynchronous
                     let url = apihost + '/api/tags';
                     fetch(url)
                         .then(response => {
@@ -220,12 +229,28 @@ function executeCommand(command) {
                             }
                         })
                         .then(text => {
-                            let tags = JSON.parse(text);
-                            models = tags.models;
-                            for (let model of models) {
-                                log(model.name);
+                            let json = JSON.parse(text);
+                            models = json.models;
+                            for (let model of models) log(model.name);
+                        })
+                        .catch(error => log('Error: ' + error.message));
+                }
+                if (command === 'ps') {
+                    log(''); // needed because fetch is asynchronous
+                    let url = apihost + '/api/ps';
+                    fetch(url)
+                        .then(response => {
+                            if (response.ok) {
+                                return response.text();
+                            } else {
+                                throw new Error('Error: ' + response.status);
                             }
-                            //log(JSON.stringify(tags, null, 2));
+                        })
+                        .then(text => {
+                            let json = JSON.parse(text);
+                            //log(JSON.stringify(json, null, 2));
+                            models = json.models;
+                            for (let model of models) log(model.name);
                         })
                         .catch(error => log('Error: ' + error.message));
                 }
@@ -694,120 +719,123 @@ function resetMessages() {
 }
 
 // make a synchronous call to the llm without a history, just a context
-async function llma(systemprompt, context, prompt, temperature = 0.1, max_tokens = 400, set_n_keep = false) {
-    m = [
-        {role: 'system', content: systemprompt},
-        {role: "user", content: context},
-        {role: "assistant", content: "ok"},
-        {role: "user", content: prompt}
+function llma(systemprompt, context, prompt, temperature = 0.1, max_tokens = 400, set_n_keep = false) {
+    const m = [
+        { role: 'system', content: systemprompt },
+        { role: "user", content: context },
+        { role: "assistant", content: "ok" },
+        { role: "user", content: prompt }
     ];
-    payload = {
+    const payload = {
         model: model, temperature: temperature, max_tokens: max_tokens,
         messages: m, stop: stoptokens, stream: false
-    }
-    let response = await fetch(apihost + '/v1/chat/completions', {
+    };
+    return fetch(apihost + '/v1/chat/completions', {
         method: "POST",
-        headers: {"Content-Type": "application/json"},
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload)
-    });
-
-    if (response.ok) {
-        data = await response.json();
-        answer = data.choices[0].message.content
-    
+    })
+    .then(response => {
+        if (response.ok) {
+            return response.json();
+        } else {
+            throw new Error(`Error: ${response.status}`);
+        }
+    })
+    .then(data => {
+        let answer = data.choices[0].message.content;
         if (set_n_keep) {
             // set keep tokens
-            usage = data.usage;
+            let usage = data.usage;
             n_keep = usage.prompt_tokens;
         }
-        const reader = response.body.getReader();
-    } else {
+        return answer;
+    })
+    .catch(error => {
+        console.error(error.message);
         return null;
-    }
+    });
 }
 
-async function llm(prompt, targethost = apihost, max_tokens = 400, temperature = 0.1) {
+function llm(prompt, targethost = apihost, max_tokens = 400, temperature = 0.1) {
     messages.push({ role: "user", content: prompt });
     let terminalLine = document.createElement('div');
     terminalLine.classList.add('output');
     terminalLine.innerHTML = `${marked.parse("[preparing answer...]")}`
     terminal.appendChild(terminalLine);
-
     payload = {
         model: model, temperature: temperature, max_tokens: max_tokens, //n_keep: n_keep,
         //repeat_penalty: 1.0,
         //penalize_nl: false, // see https://huggingface.co/google/gemma-7b-it/discussions/38#65d7b14adb51f7c160769fa1
         messages: messages, stop: stoptokens, stream: true
     }
-    let response = await fetch(targethost + '/v1/chat/completions', {
+    fetch(targethost + '/v1/chat/completions', {
         method: "POST",
-        headers: {"Content-Type": "application/json"},
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload)
-    });
-
-    if (response.ok) {
-        const reader = response.body.getReader();
-        // write a debug line for the reasponse header
-        console.log(response.headers);
+    })
+    .then(response => {
+        if (response.ok) {
+            console.log(response.headers);
+            return response.body.getReader();
+        } else {
+            throw new Error(`Error: ${response.status}`);
+        }
+    })
+    .then(reader => {
         let fullOutputText = "";
         let startTime = performance.now();
         let processingTime = 0;
         let tokenCount = 0;
-        const processChunk = async () => {
-            const result = await reader.read();
-            if (result.done) {
-                messages.push({ role: "assistant", content: fullOutputText });
-                reader.cancel();
-                // compute performance measures
-                let endTime = performance.now();
-                pp = Math.floor(processingTime - startTime);
-                tg = Math.floor(100000 * tokenCount / (endTime - processingTime)) / 100;
-                return;
-            }
-            let lines = new TextDecoder().decode(result.value).split('\n');
-            lines.forEach(line => {
-                line = line.replace(/^data: /, '').trim();
-                if (line) {
-                    // check errors and exceptions
-                    if (line === '[DONE]') return;
-
-                    // if line starts with "error", it's an error:
-                    if (line.startsWith('error')) {
-                        console.error('Error:', line);
-                        terminalLine.innerHTML = `<i>${line}</i>`;
-                        return;
-                    }
-
-                    // try to parse the json
-                    try {
-                        let json = JSON.parse(line);
-                        if (json.choices[0].delta.content) {
-                            let outputText = json.choices[0].delta.content;
-                            fullOutputText = removeStringsFromEnd(fullOutputText + outputText, stringsToRemove);
-                            terminalLine.innerHTML = `${marked.parse(fullOutputText, { sanitize: true })}`;
-                            terminalLine.querySelectorAll('pre code').forEach((block) => {
-                                if (!block.dataset.highlighted) {
-                                    hljs.highlightElement(block);
-                                    block.dataset.highlighted = true;
-                                }
-                            });
-                            if (processingTime == 0) processingTime = performance.now();
-                            tokenCount += 1;
-                            scrollToBottom();
-                        }
-                    } catch (e) {
-                        console.error('Error parsing JSON:', e);
-                        console.error('Problematic line:', line); // Debug line
-                    }
+        function processChunk() {
+            reader.read().then(result => {
+                if (result.done) {
+                    messages.push({ role: "assistant", content: fullOutputText });
+                    let endTime = performance.now();
+                    let pp = Math.floor(processingTime - startTime);
+                    let tg = Math.floor(100000 * tokenCount / (endTime - processingTime)) / 100;
+                    return;
                 }
+                let lines = new TextDecoder().decode(result.value).split('\n');
+                lines.forEach(line => {
+                    line = line.replace(/^data: /, '').trim();
+                    if (line) {
+                        if (line === '[DONE]') return;
+                        if (line.startsWith('error')) {
+                            console.error('Error:', line);
+                            terminalLine.innerHTML = `<i>${line}</i>`;
+                            return;
+                        }
+                        try {
+                            let json = JSON.parse(line);
+                            if (json.choices[0].delta.content) {
+                                let outputText = json.choices[0].delta.content;
+                                fullOutputText = removeStringsFromEnd(fullOutputText + outputText, stringsToRemove);
+                                terminalLine.innerHTML = `${marked.parse(fullOutputText, { sanitize: true })}`;
+                                terminalLine.querySelectorAll('pre code').forEach((block) => {
+                                    if (!block.dataset.highlighted) {
+                                        hljs.highlightElement(block);
+                                        block.dataset.highlighted = true;
+                                    }
+                                });
+                                if (processingTime == 0) processingTime = performance.now();
+                                tokenCount += 1;
+                                scrollToBottom();
+                            }
+                        } catch (e) {
+                            console.error('Error parsing JSON:', e);
+                            console.error('Problematic line:', line); // Debug line
+                        }
+                    }
+                });
+                processChunk();
             });
-            processChunk();
-        };
+        }
         processChunk();
-    } else {
-        console.error(`Error: ${response.status}`);
-        return null;
-    }
+    })
+    .catch(error => {
+        console.error(error.message);
+    });
 
     function removeStringsFromEnd(text, strings) {
         for (let str of strings) {
@@ -819,39 +847,51 @@ async function llm(prompt, targethost = apihost, max_tokens = 400, temperature =
     }
 }
 
-async function llm_warmup(targethost = apihost, temperature = 0.1, max_tokens = 400) {
+function llm_warmup(targethost = apihost, temperature = 0.1, max_tokens = 400) {
     let m = [{
         role: 'system',
         content: defaultSystemPrompt
     }];
-    payload = {
+    const payload = {
         model: model, temperature: temperature, max_tokens: max_tokens, n_keep: 0,
         messages: m, stop: stoptokens
-    }
-    let response = await fetch(targethost + '/v1/chat/completions', {
+    };
+
+    return fetch(targethost + '/v1/chat/completions', {
         method: "POST",
-        headers: {"Content-Type": "application/json"},
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload)
-    });
+    })
+    .then(response => {
+        if (response.ok) {
+            return response.json().then(data => {
+                // get answer
+                let answer = data.choices[0].message.content;
 
-    if (response.ok) {
-        data = await response.json();
-        // get answer
-        answer = data.choices[0].message.content
+                // get usage metrics
+                let usage = data.usage;
+                let completion_tokens = usage.completion_tokens; // 203
+                let prompt_tokens = usage.prompt_tokens; // 106
+                let total_tokens = usage.total_tokens; // 309
 
-        // get usage metrics
-        usage = data.usage;
-        completion_tokens = usage.completion_tokens; // 203
-        prompt_tokens = usage.prompt_tokens; // 106
-        total_tokens= usage.total_tokens; // 309
-        // set keep tokens
-        n_keep = prompt_tokens;
-        const reader = response.body.getReader();
-    } else {
+                // set keep tokens
+                n_keep = prompt_tokens;
+                return {
+                    answer: answer,
+                    completion_tokens: completion_tokens,
+                    prompt_tokens: prompt_tokens,
+                    total_tokens: total_tokens
+                };
+            });
+        } else {
+            throw new Error(`Error: ${response.status}`);
+        }
+    })
+    .catch(error => {
+        console.error(error.message);
         return null;
-    }
+    });
 }
-
 async function log(terminalText) {
     // tokenize terminalText
     const tokens = terminalText.split(/ +/).map(token => token + ' ');
