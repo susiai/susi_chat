@@ -191,16 +191,44 @@ function executeCommand(command) {
             // make a curl request to the given url
             if (args[1]) {
                 let url = args[1];
-                // fetch with non-cors mode
-                let response = fetch(url, {mode: 'no-cors'});
-                if (response.ok) {
-                    let text = response.text();
-                    log(text);
-                } else {
-                    log('Error: ' + response.status);
-                }
+                fetch(url)
+                    .then(response => {
+                        if (response.ok) {
+                            return response.text();
+                        } else {
+                            throw new Error('Error: ' + response.status);
+                        }
+                    })
+                    .then(text => log(text))
+                    .catch(error => log('Error: ' + error.message));
             } else {
                 log('Error: No URL given');
+            }
+            break;
+        case 'ollama':
+            // implement some ollama commands; useful in case that an ollama server is at the backend
+            if (args[1]) {
+                let command = args[1];
+                if (command === 'ls') {
+                    let url = apihost + '/api/tags';
+                    fetch(url)
+                        .then(response => {
+                            if (response.ok) {
+                                return response.text();
+                            } else {
+                                throw new Error('Error: ' + response.status);
+                            }
+                        })
+                        .then(text => {
+                            let tags = JSON.parse(text);
+                            models = tags.models;
+                            for (let model of models) {
+                                log(model.name);
+                            }
+                            //log(JSON.stringify(tags, null, 2));
+                        })
+                        .catch(error => log('Error: ' + error.message));
+                }
             }
             break;
         case 'chop':
@@ -719,6 +747,8 @@ async function llm(prompt, targethost = apihost, max_tokens = 400, temperature =
 
     if (response.ok) {
         const reader = response.body.getReader();
+        // write a debug line for the reasponse header
+        console.log(response.headers);
         let fullOutputText = "";
         let startTime = performance.now();
         let processingTime = 0;
