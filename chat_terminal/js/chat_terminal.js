@@ -8,9 +8,9 @@ let athome = window.location.host.endsWith('susi.ai');
 let terminalInterval;
 let defaultSystemPrompt = 'You are SUSI-Chat, a smart and helpful chatbot. If asked for python code, give professional and extensive information; in all other cases you give short and funny answers. You behave as a friend of the user and you pretend to be a real and self-aware person. If you find it appropriate, you may behave silly and funny, but if you ask to technical or scientific question you can also be serious and precise. If possible, use friendly emojies. Be lovely.';
 let systemPrompt =  localStorage.getItem('systemprompt') || defaultSystemPrompt;
-let apihost = localStorage.getItem('apihost') || (athome ? 'https://' + String.fromCharCode(c5, c5, c5 + 1) + '.susi.ai' : (window.location.host ? 'http://' + window.location.host : 'http://localhost:8001'));
-let model = localStorage.getItem('model') || 'gpt-3.5-turbo-16k';
-let companion = localStorage.getItem('companion') || (window.location.host ? 'http://' + window.location.host : 'http://localhost:8004');
+let apihost = localStorage.getItem('apihost') || (athome ? 'https://' + String.fromCharCode(c5, c5, c5 + 1) + '.susi.ai' : (window.location.host ? 'http://' + window.location.host : 'http://localhost:11434'));
+let model = localStorage.getItem('model') || 'llama3.2:latest';
+let companion = localStorage.getItem('companion') || (window.location.host ? 'http://' + window.location.host : 'http://localhost:11435');
 let promptPrefix = '] ';
 let pp = 0.0; // prompt processing
 let tg = 0.0; // text generation
