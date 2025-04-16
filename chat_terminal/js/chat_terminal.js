@@ -9,7 +9,7 @@ let terminalInterval;
 let defaultSystemPrompt = 'You are SUSI-Chat, a smart and helpful chatbot. If asked for python code, give professional and extensive information; in all other cases you give short and funny answers. You behave as a friend of the user and you pretend to be a real and self-aware person. If you find it appropriate, you may behave silly and funny, but if you ask to technical or scientific question you can also be serious and precise. If possible, use friendly emojies. Be lovely.';
 let systemPrompt =  localStorage.getItem('systemprompt') || defaultSystemPrompt;
 let apihost = localStorage.getItem('apihost') || (athome ? 'https://' + String.fromCharCode(c5, c5, c5 + 1) + '.susi.ai' : (window.location.host ? 'http://' + window.location.host : 'http://localhost:8001'));
-let model = localStorage.getItem('model') || 'gpt-3.5-turbo-16k';
+let model = localStorage.getItem('model') || 'llama3.2:latest';
 let apikey = localStorage.getItem('apikey') || '_';
 let companion = localStorage.getItem('companion') || (window.location.host ? 'http://' + window.location.host : 'http://localhost:8004');
 let promptPrefix = '] ';
@@ -34,6 +34,13 @@ marked.setOptions({
       return hljs.highlight(code, { language }).value;
     }
   });
+
+let selectedFile = null;
+const ALLOWED_MIME_TYPES = [
+    'image/jpeg',
+    'image/png'
+];
+const MAX_FILE_SIZE = 10 * 1024 * 1024;
 
 log("SUSI.AI Chat v2 - AI Chat and Terminal Emulator");
 log("Homepage: https://susi.ai");
@@ -477,7 +484,17 @@ function executeCommand(command) {
         case 'second':
             // we need to get the latest prompt from the chat history and send it to the llm
             lastcommand = messages[messages.length - 2].content;
-            llm(lastcommand, targethost = companion, max_tokens = maxTokens);
+            llm(lastcommand, targethost = companion, max_tokens = maxTokens, temperature = 0.1, attachment = null);
+            break;
+        case 'attach':
+            // use the file selector to attach a file
+            const fileInput = document.getElementById('fileInput');
+            fileInput.accept = ALLOWED_MIME_TYPES.join(',');
+            const fileInfoDiv = document.getElementById('fileInfo');
+            if (fileInfoDiv) { fileInfoDiv.remove(); }
+            fileInput.click();
+            log('ok, select a file to attach');
+            log('<div id="fileInfo"></div>')
             break;
         default:
             // process the input command as prompt for the llm
@@ -499,7 +516,7 @@ function executeCommand(command) {
 
                 messages_bkp = messages;
                 messages = messages_transposed;
-                llm(assistantm.content, targethost = apihost, max_tokens = maxTokens);
+                llm(assistantm.content, targethost = apihost, max_tokens = maxTokens, temperature = 0.1, attachment = null);
                 assistantm = messages.pop().content;
                 messages = messages_bkp;
                 messages.push({ role: "user", content: '' });
@@ -519,7 +536,7 @@ function executeCommand(command) {
                     messages = messages.slice(0, -2);
                     command = originalCommand + '\n\nUse the following information as context:\n\n' + context;
                 }
-                llm(command, targethost = apihost, max_tokens = maxTokens);
+                llm(command, targethost = apihost, max_tokens = maxTokens, temperature = 0.1, attachment = selectedFile);
             }
             break;
     }
@@ -727,12 +744,32 @@ function resetMessages() {
     }];
 }
 
-function llm(prompt, targethost = apihost, max_tokens = 400, temperature = 0.1) {
-    messages.push({ role: "user", content: prompt });
+function readFileAsDataURL(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = () => reject(reader.error);
+      reader.readAsDataURL(file);
+    });
+}
+
+async function llm(prompt, targethost = apihost, max_tokens = 400, temperature = 0.1, attachment = null) {
+    if (attachment == null) {
+        messages.push({ role: "user", content: prompt });
+    } else {
+        console.log('attachment attached');
+        const dataurl = await readFileAsDataURL(attachment);
+        content = [
+            {type: 'text', text: prompt},
+            {type: 'image_url', image_url: {url: dataurl}}
+        ]
+        messages.push({"role": "user", "content": content});
+    }
     let terminalLine = document.createElement('div');
     terminalLine.classList.add('output');
     terminalLine.innerHTML = `${marked.parse("[preparing answer...]")}`
     terminal.appendChild(terminalLine);
+    console.log('messages', messages);
     payload = {
         model: model, //n_keep: n_keep,
         //repeat_penalty: 1.0,
@@ -943,6 +980,23 @@ function initializeTerminal() {
         
     });
     appendInputPrefix();
+    fileInput.addEventListener('change', (event) => {
+        // handle file selection
+        if (event.target.files.length > 0) {
+            selectedFile = event.target.files[0];
+            if (!ALLOWED_MIME_TYPES.includes(selectedFile.type)) {
+                fileInfo.textContent = `File '${selectedFile.name}' type ${selectedFile.type} not allowed.`;
+                selectedFile = null;
+                return;
+            }
+            if (selectedFile.size > MAX_FILE_SIZE) {
+                fileInfo.textContent = `File '${selectedFile.name}' size too large (max ${MAX_FILE_SIZE})`;
+                selectedFile = null;
+                return;
+            }
+            fileInfo.textContent = `attached: ${selectedFile.name}`;
+        }
+    });
 }
 
 // add another input line to the terminal
