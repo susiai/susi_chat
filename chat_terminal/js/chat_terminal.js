@@ -10,6 +10,7 @@ let defaultSystemPrompt = 'You are SUSI-Chat, a smart and helpful chatbot. If as
 let systemPrompt =  localStorage.getItem('systemprompt') || defaultSystemPrompt;
 let apihost = localStorage.getItem('apihost') || (athome ? 'https://' + String.fromCharCode(c5, c5, c5 + 1) + '.susi.ai' : (window.location.host ? 'http://' + window.location.host : 'http://localhost:8001'));
 let model = localStorage.getItem('model') || 'gpt-3.5-turbo-16k';
+let apikey = localStorage.getItem('apikey') || '_';
 let companion = localStorage.getItem('companion') || (window.location.host ? 'http://' + window.location.host : 'http://localhost:8004');
 let promptPrefix = '] ';
 let pp = 0.0; // prompt processing
@@ -95,7 +96,6 @@ function executeCommand(command) {
                 log('Host API : ' + apihost);
             }
             break;
-
         case 'model':
             if (args[1]) {
                 model = args[1];
@@ -103,6 +103,15 @@ function executeCommand(command) {
                 log('set model to ' + model);
             } else {
                 log('model : ' + model);
+            }
+            break;
+        case 'apikey':
+            if (args[1]) {
+                apikey = args[1];
+                localStorage.setItem('apikey', apikey);
+                log('set apikey');
+            } else {
+                log('you can only set the api key, not view one, give a as argument');
             }
             break;
         case 'max_tokens':
@@ -718,45 +727,6 @@ function resetMessages() {
     }];
 }
 
-// make a synchronous call to the llm without a history, just a context
-function llma(systemprompt, context, prompt, temperature = 0.1, max_tokens = 400, set_n_keep = false) {
-    const m = [
-        { role: 'system', content: systemprompt },
-        { role: "user", content: context },
-        { role: "assistant", content: "ok" },
-        { role: "user", content: prompt }
-    ];
-    const payload = {
-        model: model, temperature: temperature, max_tokens: max_tokens,
-        messages: m, stop: stoptokens, stream: false
-    };
-    return fetch(apihost + '/v1/chat/completions', {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload)
-    })
-    .then(response => {
-        if (response.ok) {
-            return response.json();
-        } else {
-            throw new Error(`Error: ${response.status}`);
-        }
-    })
-    .then(data => {
-        let answer = data.choices[0].message.content;
-        if (set_n_keep) {
-            // set keep tokens
-            let usage = data.usage;
-            n_keep = usage.prompt_tokens;
-        }
-        return answer;
-    })
-    .catch(error => {
-        console.error(error.message);
-        return null;
-    });
-}
-
 function llm(prompt, targethost = apihost, max_tokens = 400, temperature = 0.1) {
     messages.push({ role: "user", content: prompt });
     let terminalLine = document.createElement('div');
@@ -764,14 +734,25 @@ function llm(prompt, targethost = apihost, max_tokens = 400, temperature = 0.1) 
     terminalLine.innerHTML = `${marked.parse("[preparing answer...]")}`
     terminal.appendChild(terminalLine);
     payload = {
-        model: model, temperature: temperature, max_tokens: max_tokens, //n_keep: n_keep,
+        model: model, //n_keep: n_keep,
         //repeat_penalty: 1.0,
         //penalize_nl: false, // see https://huggingface.co/google/gemma-7b-it/discussions/38#65d7b14adb51f7c160769fa1
-        messages: messages, stop: stoptokens, stream: true
+        messages: messages, stream: true
+    }
+    if (model.startsWith('o4')) {
+        payload['max_completion_tokens'] = max_tokens;
+    } else {
+        payload['max_tokens'] = max_tokens;
+        payload['temperature'] = temperature;
+        payload['stop'] = stoptokens;
+    }
+    headers = { "Content-Type": "application/json" }
+    if (apikey && apikey != '' && apikey != '_') {
+        headers['Authorization'] = 'Bearer ' + apikey;
     }
     fetch(targethost + '/v1/chat/completions', {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: headers,
         body: JSON.stringify(payload)
     })
     .then(response => {
