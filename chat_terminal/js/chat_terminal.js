@@ -776,7 +776,7 @@ async function llm(prompt, targethost = apihost, max_tokens = 400, temperature =
         //penalize_nl: false, // see https://huggingface.co/google/gemma-7b-it/discussions/38#65d7b14adb51f7c160769fa1
         messages: messages, stream: true
     }
-    if (model.startsWith('o4')) {
+    if (model.startsWith('o4') || model.startsWith('gpt-4.1')) {
         payload['max_completion_tokens'] = max_tokens;
     } else {
         payload['max_tokens'] = max_tokens;
