@@ -3,3 +3,18 @@
 chat_terminal/.DS_Store
 chat_terminal/js/.DS_Store
 chat_terminal/css/.DS_Store
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+    <title>Unicorn Story</title>
+    </head>
+    <body>
+      <h1>Bedtime Story Generator 🦄</h1>
+        <button id="generate">Generate Story</button>
+          <pre id="output"></pre>
+
+            <script>
+                document.getElementById('generate').addEventListener('click', async () => {
+                      document.getElementById('output').textContent = "Generating...";
+                      
