@@ -18,6 +18,13 @@
 // Open a connection to the database
 const openRequest = indexedDB.open('vfs', 1);
 
+let vfsReadyResolve;
+let vfsReadyReject;
+window.vfsReady = new Promise((resolve, reject) => {
+  vfsReadyResolve = resolve;
+  vfsReadyReject = reject;
+});
+
 let db;
 
 // Handle the database upgrade event
@@ -36,18 +43,22 @@ openRequest.onsuccess = function (event) {
   // Define the vfs object with methods to interact with the database
   const vfs = {
     put: function (key, value) {
-      const transaction = db.transaction(['keyValueStore'], 'readwrite');
-      const store = transaction.objectStore('keyValueStore');
-      const putRequest = store.put({ id: key, value });
+      return new Promise((resolve, reject) => {
+        const transaction = db.transaction(['keyValueStore'], 'readwrite');
+        const store = transaction.objectStore('keyValueStore');
+        const putRequest = store.put({ id: key, value });
 
-      // Handle the successful storage of a key-value pair
-      putRequest.onsuccess = function (event) {
-        console.log('Key-value pair stored successfully.');
-      };
-      // Handle errors
-      putRequest.onerror = function (event) {
-        console.error('Error storing key-value pair:', event.target.errorCode);
-      };
+        // Handle the successful storage of a key-value pair
+        putRequest.onsuccess = function (event) {
+          console.log('Key-value pair stored successfully.');
+          resolve();
+        };
+        // Handle errors
+        putRequest.onerror = function (event) {
+          console.error('Error storing key-value pair:', event.target.errorCode);
+          reject(event.target.errorCode);
+        };
+      });
     },
     getasync: function (key) {
       return new Promise((resolve, reject) => {
@@ -312,9 +323,11 @@ openRequest.onsuccess = function (event) {
 
   // Attach the vfs object to the window object
   window.vfs = vfs;
+  if (vfsReadyResolve) vfsReadyResolve(vfs);
 };
 
 // Handle errors when opening the database
 openRequest.onerror = function (event) {
   console.error('Error opening database:', event.target.errorCode);
+  if (vfsReadyReject) vfsReadyReject(event.target.errorCode);
 };
