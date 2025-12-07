@@ -274,32 +274,15 @@ openRequest.onsuccess = function (event) {
     },
     df: function () {
       // Show the amount of disk space used and available on the file system.
-      // Note: This is a virtual file system, so the available space is not limited by actual storage.
-      // However, for demonstration purposes, we'll set a limit of 50MB.
-      const maxSize = 50 * 1024 * 1024;
-      const transaction = db.transaction(['keyValueStore'], 'readonly');
-      const store = transaction.objectStore('keyValueStore');
-      let totalSize = 0;
-
-      return new Promise((resolve, reject) => {
-        const cursorRequest = store.openCursor();
-        cursorRequest.onsuccess = function (event) {
-          const cursor = event.target.result;
-          if (cursor) {
-            const keyLength = cursor.key ? cursor.key.length : 0;
-            const valueLength = cursor.value ? cursor.value.length : 0;
-            if (!isNaN(keyLength) && !isNaN(valueLength)) {
-              totalSize += keyLength + valueLength;
-            }
-            cursor.continue();
-          } else {
-            resolve(maxSize - totalSize);
-          }
-        };
-        cursorRequest.onerror = function (event) {
-          reject(`Error getting disk space: ${event.target.errorCode}`);
-        };
-      });
+      if (navigator.storage && navigator.storage.estimate) {
+        return navigator.storage.estimate().then((estimate) => {
+          const quota = Number.isFinite(estimate.quota) ? estimate.quota : 0;
+          const usage = Number.isFinite(estimate.usage) ? estimate.usage : 0;
+          const available = Math.max(0, quota - usage);
+          return { quota, usage, available };
+        });
+      }
+      return Promise.reject('Storage estimate not available');
     },
     grep: function (path, pattern) {
       // Search for a pattern in file content at the specified path.

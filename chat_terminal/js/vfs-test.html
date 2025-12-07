@@ -65,7 +65,7 @@
 
           // Test df
           const dfResult = await vfs.df();
-          output.innerText += `df: ${dfResult}\n`;
+          output.innerText += `df: ${JSON.stringify(dfResult)}\n`;
           await new Promise(resolve => setTimeout(resolve, 100));
 
           // Test grep

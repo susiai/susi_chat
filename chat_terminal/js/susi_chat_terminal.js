@@ -13,6 +13,7 @@ let defaultConfig = {
     apikey: '_',
     companion: defaultCompanion,
     systemprompt: defaultSystemPrompt,
+    PATH: '/bin:/usr/bin',
     agents: {},
     teams: {}
 };

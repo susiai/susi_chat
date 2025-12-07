@@ -83,6 +83,154 @@ function createChatExecutor(deps) {
         return formatHelp(entry);
     }
 
+    function escapeHtml(value) {
+        if (!value) return '';
+        return value
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
+    }
+
+    function renderChatHistory(messages, options = {}) {
+        if (!terminal) return;
+        const { addGreeting = true, addPrompt = true } = options;
+        if (typeof terminalInterval !== 'undefined' && terminalInterval) {
+            clearInterval(terminalInterval);
+        }
+        if (typeof terminalStack !== 'undefined' && Array.isArray(terminalStack)) {
+            terminalStack.length = 0;
+        }
+        terminal.innerHTML = '';
+        const renderGreeting = () => {
+            const lines = [
+                'SUSI.AI Chat v2 - AI Chat and Terminal Emulator',
+                'Homepage: https://susi.ai',
+                'Git&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;: https://github.com/susiai/susi_chat'
+            ];
+            if (typeof athome !== 'undefined' && !athome && typeof apihost !== 'undefined') {
+                lines.push('API Host: ' + apihost);
+            }
+            lines.push("Just Chat or type 'help' for a list of available commands");
+            lines.forEach((text) => {
+                const line = document.createElement('div');
+                line.classList.add('output');
+                if (typeof marked !== 'undefined' && marked.parse) {
+                    line.innerHTML = `${marked.parse(text, { sanitize: true })}`;
+                } else {
+                    line.textContent = text;
+                }
+                terminal.appendChild(line);
+            });
+        };
+        if (addGreeting) renderGreeting();
+        messages.forEach((message) => {
+            if (!message || message.role === 'system') return;
+            const role = message.role || 'message';
+            const content = typeof message.content === 'string'
+                ? message.content
+                : JSON.stringify(message.content, null, 2);
+            if (role === 'user') {
+                const inputLine = document.createElement('div');
+                inputLine.classList.add('input-line');
+                inputLine.contentEditable = false;
+                const escaped = escapeHtml(content).replace(/\r?\n/g, '<br>');
+                inputLine.innerHTML = `${escapeHtml(promptPrefix)}${escaped}`;
+                terminal.appendChild(inputLine);
+                return;
+            }
+            const line = document.createElement('div');
+            line.classList.add('output');
+            if (typeof marked !== 'undefined' && marked.parse) {
+                line.innerHTML = `${marked.parse(content, { sanitize: true })}`;
+            } else {
+                line.textContent = content;
+            }
+            terminal.appendChild(line);
+        });
+        if (addPrompt && typeof appendInputPrefix === 'function') appendInputPrefix();
+    }
+
+    function normalizeLoadedMessages(messages) {
+        if (!Array.isArray(messages)) return null;
+        if (messages.length === 0) {
+            return [{ role: 'system', content: getSystemPrompt() }];
+        }
+        if (messages[0].role !== 'system') {
+            return [{ role: 'system', content: getSystemPrompt() }].concat(messages);
+        }
+        return messages;
+    }
+
+    function parseMarkdownChat(content) {
+        const lines = content.split(/\r?\n/);
+        const messages = [];
+        let currentRole = null;
+        let buffer = [];
+        const flush = () => {
+            if (!currentRole) return;
+            const text = buffer.join('\n').trim();
+            messages.push({ role: currentRole, content: text });
+        };
+        lines.forEach((line) => {
+            const headerMatch = line.match(/^###\s+(.*)$/);
+            if (headerMatch) {
+                flush();
+                currentRole = headerMatch[1].trim().toLowerCase();
+                buffer = [];
+                return;
+            }
+            if (currentRole) buffer.push(line);
+        });
+        flush();
+        return messages.length ? messages : null;
+    }
+
+    function decodeXmlEntities(value) {
+        if (!value) return '';
+        return value
+            .replace(/&lt;/g, '<')
+            .replace(/&gt;/g, '>')
+            .replace(/&amp;/g, '&')
+            .replace(/&quot;/g, '"')
+            .replace(/&apos;/g, "'");
+    }
+
+    async function parseDocxChat(binary) {
+        const JSZipRef = typeof JSZip !== 'undefined' ? JSZip : globalThis.JSZip;
+        if (!JSZipRef) throw new Error('DOCX parser not available');
+        let buffer = null;
+        if (binary instanceof ArrayBuffer) {
+            buffer = binary;
+        } else if (ArrayBuffer.isView(binary)) {
+            buffer = binary.buffer.slice(binary.byteOffset, binary.byteOffset + binary.byteLength);
+        } else if (typeof binary === 'string') {
+            buffer = new TextEncoder().encode(binary).buffer;
+        } else if (binary && binary.buffer) {
+            buffer = binary.buffer;
+        } else {
+            throw new Error('Invalid DOCX data');
+        }
+        const zip = await JSZipRef.loadAsync(buffer);
+        const xml = await zip.file('word/document.xml').async('text');
+        const paragraphs = xml.match(/<w:p[\s\S]*?<\/w:p>/g) || [];
+        const messages = [];
+        paragraphs.forEach((paragraph) => {
+            const runs = Array.from(paragraph.matchAll(/<w:t[^>]*>([\s\S]*?)<\/w:t>/g))
+                .map((match) => decodeXmlEntities(match[1]));
+            const line = runs.join('').trim();
+            if (!line) return;
+            const splitIndex = line.indexOf(':');
+            if (splitIndex === -1) return;
+            const role = line.slice(0, splitIndex).trim().toLowerCase();
+            const content = line.slice(splitIndex + 1).trim();
+            if (!role) return;
+            messages.push({ role, content });
+        });
+        return messages.length ? messages : null;
+    }
+
     registerCommand({
         name: 'help',
         summary: 'Display information about builtin commands.',
@@ -98,6 +246,7 @@ function createChatExecutor(deps) {
         usage: 'reset',
         execute: () => {
             chatHistory.reset(getSystemPrompt());
+            renderChatHistory([], { addPrompt: false });
         }
     });
 
@@ -490,71 +639,236 @@ function createChatExecutor(deps) {
 
     registerCommand({
         name: 'save',
-        summary: 'Reserved for saving chat history or code.',
-        usage: 'save',
-        execute: () => {}
+        summary: 'Save the current chat history to a file.',
+        usage: 'save <filename>',
+        execute: async (args) => {
+            if (!args[1]) {
+                log('Error: Missing filename');
+                return;
+            }
+            let filename = args[1];
+            try {
+                let datenow = new Date();
+                let dateString = datenow.toLocaleDateString() + ' ' + datenow.toLocaleTimeString();
+                if (!filename.includes('.')) filename += '.json';
+                if (filename.endsWith('.doc')) filename = filename.replace('.doc', '.docx');
+                let data = null;
+                if (filename.endsWith('.json')) {
+                    data = JSON.stringify(chatHistory.getMessages(), null, 2);
+                } else if (filename.endsWith('.md') || filename.endsWith('.txt')) {
+                    const parts = ['# Chat log from ' + dateString + '\n\n'];
+                    for (let message of chatHistory.getMessages()) {
+                        parts.push('### ' + message.role + '\n' + message.content + '\n\n');
+                    }
+                    data = parts.join('');
+                } else if (filename.endsWith('.docx')) {
+                    const paragraphs = chatHistory.getMessages().map((message) => (
+                        new docx.Paragraph({
+                            children: [new docx.TextRun(message.role + ': ' + message.content)]
+                        })
+                    ));
+                    const doc = new docx.Document({
+                        creator: 'SUSI.AI',
+                        sections: [{ properties: {}, children: paragraphs }]
+                    });
+                    if (docx.Packer && typeof docx.Packer.toBlob === 'function') {
+                        const blob = await docx.Packer.toBlob(doc);
+                        data = await blob.arrayBuffer();
+                    } else if (docx.Packer && typeof docx.Packer.toBuffer === 'function') {
+                        data = await docx.Packer.toBuffer(doc);
+                    } else {
+                        const packer = new docx.Packer();
+                        if (typeof packer.toBlob === 'function') {
+                            const blob = await packer.toBlob(doc);
+                            data = await blob.arrayBuffer();
+                        } else if (typeof packer.toBuffer === 'function') {
+                            data = await packer.toBuffer(doc);
+                        } else {
+                            throw new Error('DOCX export not supported');
+                        }
+                    }
+                } else {
+                    log('Error: Invalid file extension');
+                    return;
+                }
+                const path = shell.resolvePath(filename);
+                await vfs.put(path, data);
+                log('Saved chat history to ' + filename);
+            } catch (error) {
+                console.error('save error', error);
+                log('Error: Unable to save chat history');
+            }
+        }
+    });
+
+    registerCommand({
+        name: 'load',
+        summary: 'Load chat history from a file.',
+        usage: 'load <filename>',
+        execute: async (args) => {
+            if (!args[1]) {
+                log('Error: Missing filename');
+                return;
+            }
+            try {
+                let filename = args[1];
+                let raw = null;
+                let resolvedPath = null;
+                if (filename.includes('.')) {
+                    resolvedPath = shell.resolvePath(filename);
+                    raw = await vfs.get(resolvedPath);
+                } else {
+                    const extensions = ['.json', '.md', '.txt', '.docx'];
+                    for (let i = 0; i < extensions.length; i++) {
+                        const candidate = filename + extensions[i];
+                        try {
+                            resolvedPath = shell.resolvePath(candidate);
+                            raw = await vfs.get(resolvedPath);
+                            filename = candidate;
+                            break;
+                        } catch (error) {
+                            raw = null;
+                        }
+                    }
+                    if (raw === null) {
+                        log('Error: File not found');
+                        return;
+                    }
+                }
+                let messages = null;
+                if (filename.endsWith('.json')) {
+                    const parsed = JSON.parse(raw);
+                    messages = Array.isArray(parsed) ? parsed : parsed && Array.isArray(parsed.messages) ? parsed.messages : null;
+                } else if (filename.endsWith('.md') || filename.endsWith('.txt')) {
+                    const text = typeof raw === 'string' ? raw : new TextDecoder().decode(raw);
+                    messages = parseMarkdownChat(text);
+                } else if (filename.endsWith('.docx')) {
+                    messages = await parseDocxChat(raw);
+                } else {
+                    log('Error: Invalid file extension');
+                    return;
+                }
+                messages = normalizeLoadedMessages(messages);
+                if (!messages) {
+                    log('Error: Invalid chat history format');
+                    return;
+                }
+                if (messages.length > 0 && messages[0].role === 'system' && typeof messages[0].content === 'string') {
+                    setSystemPrompt(messages[0].content);
+                }
+                chatHistory.setMessages(messages);
+                renderChatHistory(messages);
+            } catch (error) {
+                log('Error: Unable to load chat history');
+            }
+        }
     });
 
     registerCommand({
         name: 'download',
-        summary: 'Reserved for downloading files.',
-        usage: 'download',
-        execute: () => {}
+        summary: 'Download a file from the virtual file system.',
+        usage: 'download <filename>',
+        execute: async (args) => {
+            if (!args[1]) {
+                log('Error: Missing filename');
+                return;
+            }
+            const filename = args[1];
+            const path = shell.resolvePath(filename);
+            try {
+                const content = await vfs.get(path);
+                const mimetype = filename2mime(filename);
+                const blob = new Blob([content], { type: mimetype });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.style.display = 'none';
+                a.href = url;
+                a.download = filename;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+                log('Downloading ' + filename);
+            } catch (error) {
+                log('Error: Unable to download file');
+            }
+        }
     });
 
     registerCommand({
-        name: 'export',
-        summary: 'Export the chat history.',
-        usage: 'export [filename]',
+        name: 'restore',
+        summary: 'Restore the virtual file system from a zip file.',
+        usage: 'restore [-m merge|--mode merge|--mode replace]',
         execute: (args) => {
-            let filename = args[1] || 'chat.txt';
-            let mimetype = 'application/json';
-            let datenow = new Date();
-            let dateString = datenow.toLocaleDateString() + ' ' + datenow.toLocaleTimeString();
-            let parts = [];
-            if (!filename.includes('.')) filename += '.txt';
-            if (filename.endsWith('.doc')) filename = filename.replace('.doc', '.docx');
-            if (filename.endsWith('.json')) {
-                const jsonString = JSON.stringify(chatHistory.getMessages(), null, 2);
-                parts.push(jsonString);
-            } else if (filename.endsWith('.md') || filename.endsWith('.txt')) {
-                parts.push('# Chat log from ' + dateString + '\n\n');
-                for (let message of chatHistory.getMessages()) {
-                    parts.push('### ' + message.role + '\n' + message.content + '\n\n');
-                }
-                mimetype = filename.endsWith('.md') ? 'text/markdown' : 'text/plain';
-            } else if (filename.endsWith('.csv')) {
-                parts.push('role;content\n');
-                for (let message of chatHistory.getMessages()) {
-                    parts.push(message.role + ';' + message.content + '\n');
-                }
-                mimetype = 'text/csv';
-            } else if (filename.endsWith('.docx')) {
-                const doc = new docx.Document();
-                for (let message of chatHistory.getMessages()) {
-                    doc.addSection({properties: {},
-                        children: [new docx.Paragraph({
-                            children: [new docx.TextRun(message.role + ': ' + message.content)]
-                        })]
-                    });
-                }
-                parts.push(new docx.Packer().toBuffer(doc));
-                mimetype = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
-            } else {
-                log('Error: Invalid file extension');
+            const JSZipRef = typeof JSZip !== 'undefined' ? JSZip : globalThis.JSZip;
+            if (!JSZipRef) {
+                log('Error: JSZip is not available');
                 return;
             }
-            const blob = new Blob(parts, {type: mimetype});
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.style.display = 'none';
-            a.href = url;
-            a.download = filename;
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-            URL.revokeObjectURL(url);
-            log('Saving chat history to file ' + filename);
+            let mode = 'replace';
+            for (let i = 1; i < args.length; i++) {
+                if (args[i] === '-m' && args[i + 1]) {
+                    mode = args[i + 1];
+                    i += 1;
+                    continue;
+                }
+                if (args[i] === '--mode' && args[i + 1]) {
+                    mode = args[i + 1];
+                    i += 1;
+                    continue;
+                }
+            }
+            if (mode !== 'replace' && mode !== 'merge') {
+                log('Error: Invalid mode');
+                return;
+            }
+            const fileInput = document.getElementById('fileInput');
+            if (!fileInput) {
+                log('Error: File input not available');
+                return;
+            }
+            const previousAccept = fileInput.accept;
+            fileInput.accept = '.zip';
+            const handler = async (event) => {
+                event.stopPropagation();
+                if (event.stopImmediatePropagation) event.stopImmediatePropagation();
+                const file = event.target.files && event.target.files[0];
+                fileInput.value = '';
+                fileInput.accept = previousAccept;
+                if (!file) return;
+                try {
+                    const buffer = await file.arrayBuffer();
+                    const zip = await JSZipRef.loadAsync(buffer);
+                    if (mode === 'replace') {
+                        const entries = await vfs.ls('/');
+                        for (let entry of entries) {
+                            if (!entry) continue;
+                            const fullPath = entry.startsWith('/') ? entry : `/${entry}`;
+                            vfs.rm(fullPath);
+                        }
+                    }
+                    const decoder = new TextDecoder('utf-8', { fatal: true });
+                    for (let name of Object.keys(zip.files)) {
+                        const zipEntry = zip.files[name];
+                        if (zipEntry.dir) continue;
+                        const data = await zipEntry.async('uint8array');
+                        let content = data;
+                        try {
+                            content = decoder.decode(data);
+                        } catch (error) {
+                            content = data;
+                        }
+                        const path = name.startsWith('/') ? name : `/${name}`;
+                        await vfs.put(path, content);
+                    }
+                    log(`Restore completed (${mode})`);
+                } catch (error) {
+                    console.error('restore error', error);
+                    log('Error: Unable to restore backup');
+                }
+            };
+            fileInput.addEventListener('change', handler, { once: true, capture: true });
+            fileInput.click();
         }
     });
 
