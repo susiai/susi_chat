@@ -796,6 +796,71 @@ function createChatExecutor(deps) {
     });
 
     registerCommand({
+        name: 'upload',
+        summary: 'Upload a file into the virtual file system.',
+        usage: 'upload',
+        execute: () => {
+            const fileInput = document.getElementById('fileInput');
+            if (!fileInput) {
+                log('Error: File input not available');
+                return;
+            }
+            const isTextFile = (file) => {
+                if (file.type && file.type.startsWith('text/')) return true;
+                if (file.type === 'application/json') return true;
+                const name = (file.name || '').toLowerCase();
+                const ext = name.includes('.') ? name.split('.').pop() : '';
+                return ['txt', 'md', 'json', 'csv', 'log', 'sh', 'js', 'css', 'html', 'xml', 'yml', 'yaml'].includes(ext);
+            };
+            const previousAccept = fileInput.accept;
+            fileInput.accept = '';
+            const handler = async (event) => {
+                const file = event.target.files[0];
+                try {
+                    if (!file) {
+                        log('Error: No file selected');
+                        return;
+                    }
+                    if (typeof MAX_FILE_SIZE !== 'undefined' && file.size > MAX_FILE_SIZE) {
+                        log(`Error: File size too large (max ${MAX_FILE_SIZE})`);
+                        return;
+                    }
+                    let content = null;
+                    const readAsText = isTextFile(file);
+                    if (readAsText) {
+                        content = await new Promise((resolve, reject) => {
+                            const reader = new FileReader();
+                            reader.onload = () => resolve(reader.result);
+                            reader.onerror = () => reject(reader.error);
+                            reader.readAsText(file);
+                        });
+                    } else if (typeof file.arrayBuffer === 'function') {
+                        content = await file.arrayBuffer();
+                    } else {
+                        content = await new Promise((resolve, reject) => {
+                            const reader = new FileReader();
+                            reader.onload = () => resolve(reader.result);
+                            reader.onerror = () => reject(reader.error);
+                            reader.readAsArrayBuffer(file);
+                        });
+                    }
+                    const path = shell.resolvePath(file.name);
+                    await vfs.put(path, content);
+                    log('Uploaded ' + file.name);
+                } catch (error) {
+                    log('Error: Unable to upload file');
+                } finally {
+                    fileInput.value = '';
+                    fileInput.accept = previousAccept;
+                }
+            };
+            fileInput.addEventListener('change', handler, { once: true, capture: true });
+            fileInput.click();
+            log('ok, select a file to upload');
+        }
+    });
+
+    registerCommand({
         name: 'restore',
         summary: 'Restore the virtual file system from a zip file.',
         usage: 'restore [-m merge|--mode merge|--mode replace]',
