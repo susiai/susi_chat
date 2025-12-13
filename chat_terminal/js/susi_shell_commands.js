@@ -95,20 +95,18 @@ function createShell(vfs, options = {}) {
                     }
                 } : ctx;
                 const result = await originalExecute(args, wrappedCtx, input);
-                if (result && typeof result === 'object' && (Object.prototype.hasOwnProperty.call(result, 'output') || Object.prototype.hasOwnProperty.call(result, 'status'))) {
-                    if (!statusSet && wrappedCtx && typeof wrappedCtx.setExitStatus === 'function' && Object.prototype.hasOwnProperty.call(result, 'status')) {
-                        wrappedCtx.setExitStatus(result.status);
-                        statusSet = true;
-                    }
-                    if (!statusSet && wrappedCtx && typeof wrappedCtx.setExitStatus === 'function') {
-                        wrappedCtx.setExitStatus(0);
-                    }
-                    return typeof result.output === 'string' ? result.output : '';
-                }
+                const hasShape = result && typeof result === 'object' && (Object.prototype.hasOwnProperty.call(result, 'output') || Object.prototype.hasOwnProperty.call(result, 'status'));
+                const outputText = hasShape && typeof result.output === 'string' ? result.output : (typeof result === 'string' ? result : '');
+                const statusValue = hasShape && Object.prototype.hasOwnProperty.call(result, 'status') ? result.status : 0;
                 if (!statusSet && wrappedCtx && typeof wrappedCtx.setExitStatus === 'function') {
-                    wrappedCtx.setExitStatus(0);
+                    wrappedCtx.setExitStatus(statusValue);
+                    statusSet = true;
                 }
-                return result;
+                return {
+                    output: outputText,
+                    status: statusValue,
+                    stderr: hasShape && result.stderr === true
+                };
             }
         };
         commandList.push(normalized);
@@ -575,6 +573,18 @@ function createShell(vfs, options = {}) {
         return splitLines(text).join('<br>');
     }
 
+    function formatBytes(value) {
+        if (!value) return '0B';
+        const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+        let size = value;
+        let unitIndex = 0;
+        while (size >= 1024 && unitIndex < units.length - 1) {
+            size /= 1024;
+            unitIndex += 1;
+        }
+        return `${size < 10 && unitIndex > 0 ? size.toFixed(1) : Math.round(size)}${units[unitIndex]}`;
+    }
+
     async function handleCommandOutput(command, outputText, isError, input, envMap, finalStatus) {
         if (command.redir.errPath && isError) {
             const errPath = resolvePath(command.redir.errPath);
@@ -618,11 +628,6 @@ function createShell(vfs, options = {}) {
             .replace(/\\n/g, '\n')
             .replace(/\\t/g, '\t')
             .replace(/\\r/g, '\r');
-    }
-
-    function errorResult(ctx, message, code = 1) {
-        const text = message.startsWith('Error:') ? message : `Error: ${message}`;
-        return { output: text, status: code };
     }
 
     function expandCharSet(value) {
@@ -1063,6 +1068,39 @@ function createShell(vfs, options = {}) {
         }
     }
 
+    function isQuotedToken(token) {
+        if (!token) return false;
+        return (token.startsWith('"') && token.endsWith('"')) || (token.startsWith("'") && token.endsWith("'"));
+    }
+
+    async function expandGlobs(args, rawArgs, ctx, startIndex = 1) {
+        const expanded = [];
+        for (let i = 0; i < args.length; i++) {
+            const value = args[i];
+            const raw = rawArgs[i] ?? value;
+            if (i < startIndex || !value || !hasGlobChars(value) || isQuotedToken(raw)) {
+                expanded.push(value);
+                continue;
+            }
+            const slashIndex = value.lastIndexOf('/');
+            const baseArg = slashIndex >= 0 ? value.slice(0, slashIndex) : '';
+            const pattern = slashIndex >= 0 ? value.slice(slashIndex + 1) : value;
+            const basePath = baseArg
+                ? ctx.ensureDirPath(ctx.resolvePath(baseArg))
+                : (value.startsWith('/') ? '/' : ctx.getCurrentPath());
+            const prefix = slashIndex >= 0 ? value.slice(0, slashIndex + 1) : '';
+            const matches = (await listImmediateEntries(basePath, ctx.vfs))
+                .filter((entry) => matchGlob(entry.name, pattern))
+                .map((entry) => `${prefix}${entry.name}`);
+            if (!matches.length) {
+                expanded.push(value);
+                continue;
+            }
+            expanded.push(...matches);
+        }
+        return expanded;
+    }
+
     async function resolveScriptPath(target, ctx, envMap) {
         if (!target) return null;
         const hasSlash = target.includes('/');
@@ -1129,27 +1167,32 @@ function createShell(vfs, options = {}) {
         let combinedOutput = '';
         for (let i = 0; i < statements.length; i++) {
             const result = await executeStatement(statements[i], ctx, envMap);
+            if (result && result.stderr) {
+                return result;
+            }
             if (result && result.output) {
                 combinedOutput = combinedOutput ? combinedOutput + '<br>' + result.output : result.output;
             }
             if (result && result.signal) {
-                return { output: combinedOutput, signal: result.signal };
+                return { output: combinedOutput, status: result.status || 0, stderr: false, signal: result.signal };
             }
         }
-        return { output: combinedOutput, signal: null };
+        const finalStatus = envMap && Object.prototype.hasOwnProperty.call(envMap, '?') ? Number(envMap['?']) || 0 : 0;
+        return { output: combinedOutput, status: finalStatus, stderr: false, signal: null };
     }
 
     async function executeStatement(statement, ctx, envMap) {
-        if (!statement) return { output: '', signal: null };
+        if (!statement) return { output: '', status: 0, stderr: false, signal: null };
         if (statement.type === 'if') {
             let executed = false;
             for (let i = 0; i < statement.branches.length; i++) {
                 const condResult = await executeCondition(statement.branches[i].cond, ctx, envMap);
-                if (condResult.error) return { output: condResult.error, signal: null };
+                if (condResult.stderr) return condResult;
                 if (condResult.signal) return condResult;
                 if (envMap['?'] === '0') {
                     const bodyResult = await executeStatements(statement.branches[i].body, ctx, envMap);
                     if (bodyResult.signal) return bodyResult;
+                    if (bodyResult.stderr) return bodyResult;
                     if (bodyResult.output) return bodyResult;
                     executed = true;
                     break;
@@ -1158,48 +1201,52 @@ function createShell(vfs, options = {}) {
             if (!executed && statement.elseBody) {
                 const elseResult = await executeStatements(statement.elseBody, ctx, envMap);
                 if (elseResult.signal) return elseResult;
+                if (elseResult.stderr) return elseResult;
                 if (elseResult.output) return elseResult;
             }
-            return { output: '', signal: null };
+            return { output: '', status: Number(envMap['?']) || 0, stderr: false, signal: null };
         }
         if (statement.type === 'for') {
             const expandedItems = await expandLoopItems(statement.items, ctx, envMap);
-            if (expandedItems.error) return { output: expandedItems.error, signal: null };
+            if (expandedItems.error) return { output: expandedItems.error, status: 1, stderr: true, signal: null };
             let output = '';
             for (let i = 0; i < expandedItems.items.length; i++) {
                 envMap[statement.varName] = expandedItems.items[i];
                 const bodyResult = await executeStatements(statement.body, ctx, envMap);
                 if (bodyResult.signal === '__BREAK__') break;
                 if (bodyResult.signal === '__CONTINUE__') continue;
+                if (bodyResult.stderr) return bodyResult;
                 if (bodyResult.output) {
                     output = output ? output + '<br>' + bodyResult.output : bodyResult.output;
                 }
             }
-            return { output, signal: null };
+            return { output, status: Number(envMap['?']) || 0, stderr: false, signal: null };
         }
         if (statement.type === 'while') {
             let output = '';
             while (true) {
                 const condResult = await executeCondition(statement.cond, ctx, envMap);
-                if (condResult.error) return { output: condResult.error, signal: null };
+                if (condResult.stderr) return condResult;
                 if (condResult.signal) return condResult;
                 if (envMap['?'] !== '0') break;
                 const bodyResult = await executeStatements(statement.body, ctx, envMap);
                 if (bodyResult.signal === '__BREAK__') break;
                 if (bodyResult.signal === '__CONTINUE__') continue;
+                if (bodyResult.stderr) return bodyResult;
                 if (bodyResult.output) {
                     output = output ? output + '<br>' + bodyResult.output : bodyResult.output;
                 }
             }
-            return { output, signal: null };
+            return { output, status: Number(envMap['?']) || 0, stderr: false, signal: null };
         }
         if (statement.type === 'cond') {
             const condResult = await executeCondition(statement, ctx, envMap);
-            if (condResult.error) return { output: condResult.error, signal: null };
+            if (condResult.stderr) return condResult;
             if (condResult.signal) return condResult;
-            return { output: condResult.output || '', signal: null };
+            return { output: condResult.output || '', status: condResult.status || 0, stderr: false, signal: null };
         }
-        return { output: 'Error: Invalid command', signal: null };
+        envMap['?'] = '1';
+        return { output: 'Error: Invalid command', status: 1, stderr: true, signal: null };
     }
 
     async function executeCondition(condition, ctx, envMap) {
@@ -1210,14 +1257,14 @@ function createShell(vfs, options = {}) {
             if (entry.op === '&&' && lastStatus !== '0') continue;
             if (entry.op === '||' && lastStatus === '0') continue;
             const result = await executePipeline(entry.pipeline, ctx, envMap);
-            if (result.error) return result;
+            if (result.stderr) return result;
             if (result.signal) return result;
             if (result.output) {
                 output = output ? output + '<br>' + result.output : result.output;
             }
             lastStatus = envMap['?'] || '0';
         }
-        return { output, error: '', signal: null };
+        return { output, status: Number(envMap['?']) || 0, stderr: false, signal: null };
     }
 
     async function executePipeline(pipeline, ctx, envMap) {
@@ -1227,37 +1274,50 @@ function createShell(vfs, options = {}) {
             if (command.type === 'assign') {
                 if (pipeline.commands.length > 1) {
                     envMap['?'] = '1';
-                    return { output: '', error: 'Error: Invalid pipeline', signal: null };
+                    return { output: 'Error: Invalid pipeline', status: 1, stderr: true, signal: null };
                 }
                 const expandedValue = await expandWord(command.value, envMap);
-                if (expandedValue.error) return { output: '', error: expandedValue.error, signal: null };
+                if (expandedValue.error) {
+                    envMap['?'] = '1';
+                    return { output: expandedValue.error, status: 1, stderr: true, signal: null };
+                }
                 envMap[command.name] = expandedValue.value;
                 envMap['?'] = '0';
-                return { output: '', error: '', signal: null };
+                return { output: '', status: 0, stderr: false, signal: null };
             }
             if (command.type === 'break' || command.type === 'continue') {
                 if (pipeline.commands.length > 1) {
                     envMap['?'] = '1';
-                    return { output: '', error: 'Error: Invalid pipeline', signal: null };
+                    return { output: 'Error: Invalid pipeline', status: 1, stderr: true, signal: null };
                 }
-                return { output: '', error: '', signal: command.type === 'break' ? '__BREAK__' : '__CONTINUE__' };
+                return { output: '', status: 0, stderr: false, signal: command.type === 'break' ? '__BREAK__' : '__CONTINUE__' };
             }
             const isBuiltin = command.type === 'builtin';
             let args = [];
+            let rawArgs = [];
             if (isBuiltin) {
                 for (let a = 0; a < command.args.length; a++) {
+                    rawArgs.push(command.args[a]);
                     const expanded = await expandWord(command.args[a], envMap);
-                    if (expanded.error) return { output: '', error: expanded.error, signal: null };
+                    if (expanded.error) {
+                        envMap['?'] = '1';
+                        return { output: expanded.error, status: 1, stderr: true, signal: null };
+                    }
                     args.push(expanded.value);
                 }
+                args = await expandGlobs(args, rawArgs, ctx, 1);
             } else {
                 if (!command || !command.args || !command.args.length) {
                     envMap['?'] = '1';
-                    return { output: '', error: 'Error: Invalid command', signal: null };
+                    return { output: 'Error: Invalid command', status: 1, stderr: true, signal: null };
                 }
                 for (let a = 0; a < command.args.length; a++) {
+                    rawArgs.push(command.args[a]);
                     const expanded = await expandWord(command.args[a], envMap);
-                    if (expanded.error) return { output: '', error: expanded.error, signal: null };
+                    if (expanded.error) {
+                        envMap['?'] = '1';
+                        return { output: expanded.error, status: 1, stderr: true, signal: null };
+                    }
                     args.push(expanded.value);
                 }
                 const assignMatch = args[0] ? args[0].match(/^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/) : null;
@@ -1265,30 +1325,49 @@ function createShell(vfs, options = {}) {
                     const rest = args.length > 1 ? ' ' + args.slice(1).join(' ') : '';
                     envMap[assignMatch[1]] = assignMatch[2] + rest;
                     envMap['?'] = '0';
-                    return { output: '', error: '', signal: null };
+                    return { output: '', status: 0, stderr: false, signal: null };
                 }
+                args = await expandGlobs(args, rawArgs, ctx, 1);
             }
             const commandName = isBuiltin ? command.name : args[0];
             if (!isBuiltin && commandName === 'exit') {
                 const code = args[1] && !Number.isNaN(Number(args[1])) ? Number(args[1]) : 0;
                 envMap['?'] = String(code);
-                return { output: '', error: '', signal: '__EXIT__' };
+                return { output: '', status: code, stderr: false, signal: '__EXIT__' };
             }
             if (!commandMap.has(commandName)) {
+                const scriptPath = await resolveScriptPath(commandName, ctx, envMap);
+                if (scriptPath) {
+                    try {
+                        const content = await vfs.get(scriptPath);
+                        const script = typeof content === 'string' ? content : new TextDecoder().decode(content);
+                        const scriptEnv = cloneEnv(envMap);
+                        const outputResult = await runShellScript(script, ctx, scriptEnv);
+                        const outputText = outputResult && typeof outputResult.output === 'string' ? outputResult.output : '';
+                        const isError = outputResult && outputResult.stderr === true;
+                        const statusValue = outputResult && Object.prototype.hasOwnProperty.call(outputResult, 'status') ? outputResult.status : 0;
+                        const finalStatus = String(statusValue);
+                        input = await handleCommandOutput(command, outputText, isError, input, envMap, finalStatus);
+                        if (typeof input !== 'string') input = '';
+                        continue;
+                    } catch (error) {
+                        // fall through to invalid command error
+                    }
+                }
                 envMap['?'] = '127';
-                return { output: '', error: 'Error: Invalid command', signal: null };
+                return { output: 'Error: Invalid command', status: 127, stderr: true, signal: null };
             }
             if (command.redir.inputPath && i > 0) {
                 envMap['?'] = '1';
-                return { output: '', error: 'Error: Input redirection must be on the first command', signal: null };
+                return { output: 'Error: Input redirection must be on the first command', status: 1, stderr: true, signal: null };
             }
             if ((command.redir.outputPath || command.redir.errPath) && i < pipeline.commands.length - 1) {
                 envMap['?'] = '1';
-                return { output: '', error: 'Error: Output redirection must be on the last command', signal: null };
+                return { output: 'Error: Output redirection must be on the last command', status: 1, stderr: true, signal: null };
             }
             if (command.redir.inputPath && input) {
                 envMap['?'] = '1';
-                return { output: '', error: 'Error: Input already provided', signal: null };
+                return { output: 'Error: Input already provided', status: 1, stderr: true, signal: null };
             }
             if (command.redir.inputPath) {
                 try {
@@ -1296,7 +1375,7 @@ function createShell(vfs, options = {}) {
                     input = typeof content === 'string' ? content : new TextDecoder().decode(content);
                 } catch (error) {
                     envMap['?'] = '1';
-                    return { output: '', error: 'Error: Unable to read input file', signal: null };
+                    return { output: 'Error: Unable to read input file', status: 1, stderr: true, signal: null };
                 }
             }
             const handler = commandMap.get(commandName);
@@ -1309,14 +1388,16 @@ function createShell(vfs, options = {}) {
                 hasInput: i > 0 || Boolean(input) || Boolean(command.redir.inputPath),
                 setExitStatus: (code) => { exitStatusOverride = String(code); }
             };
-            const output = await handler.execute(args, cmdCtx, input);
-            const outputText = typeof output === 'string' ? output : '';
-            const isError = outputText.startsWith('Error:');
-            const finalStatus = exitStatusOverride !== null ? exitStatusOverride : '0';
+            const outputResult = await handler.execute(args, cmdCtx, input);
+            const outputText = outputResult && typeof outputResult.output === 'string' ? outputResult.output : '';
+            const isError = outputResult && outputResult.stderr === true;
+            const statusValue = outputResult && Object.prototype.hasOwnProperty.call(outputResult, 'status') ? outputResult.status : 0;
+            const finalStatus = exitStatusOverride !== null ? exitStatusOverride : String(statusValue);
             input = await handleCommandOutput(command, outputText, isError, input, envMap, finalStatus);
             if (typeof input !== 'string') input = '';
         }
-        return { output: input || '', error: '', signal: null };
+        const finalStatus = envMap && Object.prototype.hasOwnProperty.call(envMap, '?') ? Number(envMap['?']) || 0 : 0;
+        return { output: input || '', status: finalStatus, stderr: false, signal: null };
     }
 
 
@@ -1391,10 +1472,15 @@ function createShell(vfs, options = {}) {
     async function runShellScript(script, ctx, envMap) {
         const tokens = tokenizeShell(prepareShellInput(script));
         const parsed = parseShellTokens(tokens);
-        if (parsed.error) return parsed.error;
+        if (parsed.error) {
+            envMap['?'] = '1';
+            return { output: parsed.error, status: 1, stderr: true };
+        }
         const result = await executeStatements(parsed.node, ctx, envMap);
-        if (result && result.output) return result.output;
-        return '';
+        const outputText = result && result.output ? result.output : '';
+        const statusValue = result && Object.prototype.hasOwnProperty.call(result, 'status') ? result.status : 0;
+        const stderrFlag = Boolean(result && result.stderr);
+        return { output: outputText, status: statusValue, stderr: stderrFlag };
     }
 
     function toUint8Array(content) {
@@ -1496,7 +1582,10 @@ function createShell(vfs, options = {}) {
             if (firstWord) {
                 const assignMatch = firstWord.value.match(/^[A-Za-z_][A-Za-z0-9_]*=/);
                 if (!assignMatch && !commandMap.has(firstWord.value)) {
-                    return { handled: false, output: '' };
+                    const scriptPath = await resolveScriptPath(firstWord.value, getContext(), envMap);
+                    if (!scriptPath) {
+                        return { handled: false, output: '' };
+                    }
                 }
             }
         }
@@ -1584,7 +1673,7 @@ function createShell(vfs, options = {}) {
         summary: 'Set environment variables.',
         usage: 'export NAME=value | export NAME value',
         execute: async (args, ctx) => {
-            if (!args[1]) return errorResult(ctx, 'Missing name');
+            if (!args[1]) return { output: 'Error: Missing name', status: 1, stderr: true };
             const config = await readConfig();
             let name = args[1];
             let value = args.slice(2).join(' ');
@@ -1608,7 +1697,7 @@ function createShell(vfs, options = {}) {
         summary: 'Unset environment variables.',
         usage: 'unset NAME',
         execute: async (args, ctx) => {
-            if (!args[1]) return errorResult(ctx, 'Missing name');
+            if (!args[1]) return { output: 'Error: Missing name', status: 1, stderr: true };
             const config = await readConfig();
             delete config[args[1]];
             await writeConfig(config);
@@ -1621,12 +1710,21 @@ function createShell(vfs, options = {}) {
         name: 'mv',
         summary: 'Rename or move a file.',
         usage: 'mv <oldname> <newname>',
-        execute: (args, ctx) => {
+        execute: async (args, ctx) => {
             if (!args[1] || !args[2]) {
                 return { output: '', status: 1 };
             }
             const srcPath = ctx.resolvePath(args[1]);
-            const destPath = ctx.resolvePath(args[2]);
+            const destArg = args[2];
+            let destPath = ctx.resolvePath(destArg);
+            if (destPath.endsWith('/')) {
+                const targetDir = ctx.ensureDirPath(destPath);
+                const baseName = args[1].split('/').filter(Boolean).pop() || args[1];
+                if (!await ctx.dirExists(targetDir)) {
+                    return { output: 'Error: Invalid directory', status: 1, stderr: true };
+                }
+                destPath = `${targetDir}${baseName}`;
+            }
             ctx.vfs.mv(srcPath, destPath);
             return { output: '', status: 0 };
         }
@@ -1653,23 +1751,23 @@ function createShell(vfs, options = {}) {
                 if (!srcIsDir && destIsDir) {
                     const targetDir = ctx.ensureDirPath(destPath);
                     if (!await ctx.dirExists(targetDir)) {
-                        return errorResult(ctx, 'Invalid directory');
+                        return { output: 'Error: Invalid directory', status: 1, stderr: true };
                     }
                     const baseName = srcArg.split('/').filter(Boolean).pop() || srcArg;
                     const targetPath = `${targetDir}${baseName}`;
                     try {
                         const content = await ctx.vfs.get(srcPath);
                         if (typeof content !== 'string') {
-                            return errorResult(ctx, `${srcArg} is not a file`);
+                            return { output: `Error: ${srcArg} is not a file`, status: 1, stderr: true };
                         }
                         await ctx.vfs.put(targetPath, content);
                         return { output: '', status: 0 };
                     } catch (error) {
-                        return errorResult(ctx, `${srcArg} is not a file`);
+                        return { output: `Error: ${srcArg} is not a file`, status: 1, stderr: true };
                     }
                 }
                 if (!recursive) {
-                    return errorResult(ctx, 'Use -r for directories');
+                    return { output: 'Error: Use -r for directories', status: 1, stderr: true };
                 }
                 const base = ctx.ensureDirPath(srcPath);
                 const destBase = ctx.ensureDirPath(destPath);
@@ -1689,18 +1787,18 @@ function createShell(vfs, options = {}) {
                     }
                     return { output: '', status: 0 };
                 } catch (error) {
-                    return errorResult(ctx, 'Invalid directory');
+                    return { output: 'Error: Invalid directory', status: 1, stderr: true };
                 }
             }
             try {
                 const content = await ctx.vfs.get(srcPath);
                 if (typeof content !== 'string') {
-                    return errorResult(ctx, '' + srcArg + ' is not a file');
+                    return { output: `Error: ${srcArg} is not a file`, status: 1, stderr: true };
                 }
                 ctx.vfs.put(destPath, content);
                 return { output: '', status: 0 };
             } catch (error) {
-                return errorResult(ctx, '' + srcArg + ' is not a file');
+                return { output: `Error: ${srcArg} is not a file`, status: 1, stderr: true };
             }
         }
     });
@@ -1716,82 +1814,12 @@ function createShell(vfs, options = {}) {
             });
             const recursive = parsed.options.recursive;
             const force = parsed.options.force;
-            const targetArg = parsed.rest[0];
-            if (!targetArg) {
+            const targets = parsed.rest;
+            if (!targets.length) {
                 return { output: '', status: 1 };
             }
-            if (hasGlobChars(targetArg)) {
-                const slashIndex = targetArg.lastIndexOf('/');
-                const baseArg = slashIndex >= 0 ? targetArg.slice(0, slashIndex) : '';
-                const pattern = slashIndex >= 0 ? targetArg.slice(slashIndex + 1) : targetArg;
-                const basePath = baseArg ? ctx.ensureDirPath(ctx.resolvePath(baseArg)) : ctx.getCurrentPath();
-                const matches = (await listImmediateEntries(basePath, ctx.vfs))
-                    .filter((entry) => matchGlob(entry.name, pattern));
-                if (!matches.length) {
-                    return force ? { output: '', status: 0 } : errorResult(ctx, 'No matches found');
-                }
-                const removeDirTree = async (dirPath) => {
-                    const base = ctx.ensureDirPath(dirPath);
-                    const { files, dirs } = await collectTreePaths('/');
-                    for (let file of files) {
-                        if (file.startsWith(base)) ctx.vfs.rm(file);
-                    }
-                    const dirsToRemove = dirs.filter((dir) => dir.startsWith(base)).sort((a, b) => b.length - a.length);
-                    dirsToRemove.forEach((dir) => ctx.vfs.rm(dir));
-                    ctx.vfs.rm(base);
-                };
-                for (let match of matches) {
-                    const targetPath = basePath === '/' ? `/${match.name}` : `${basePath}${match.name}`;
-                    if (match.isDir) {
-                        if (!recursive) {
-                            if (!force) return errorResult(ctx, 'Use -r for directories');
-                            continue;
-                        }
-                        try {
-                            await removeDirTree(targetPath);
-                        } catch (error) {
-                            if (!force) return errorResult(ctx, 'Invalid directory');
-                        }
-                        continue;
-                    }
-                    try {
-                        ctx.vfs.rm(targetPath);
-                    } catch (error) {
-                        if (!force) return errorResult(ctx, `${match.name} is not a file`);
-                    }
-                }
-                return { output: '', status: 0 };
-            }
-            const targetPath = ctx.resolvePath(targetArg);
-            if (!targetPath.endsWith('/')) {
-                if (recursive) {
-                    try {
-                        await ctx.vfs.get(targetPath);
-                        ctx.vfs.rm(targetPath);
-                        return { output: '', status: 0 };
-                    } catch (error) {
-                        // fall through to directory removal
-                    }
-                } else {
-                    try {
-                        ctx.vfs.rm(targetPath);
-                        return { output: '', status: 0 };
-                    } catch (error) {
-                        if (force) {
-                            return { output: '', status: 0 };
-                        }
-                        return errorResult(ctx, '' + targetArg + ' is not a file');
-                    }
-                }
-            }
-            if (!recursive) {
-                if (force) {
-                    return { output: '', status: 0 };
-                }
-                return errorResult(ctx, 'Use -r for directories');
-            }
-            const base = ctx.ensureDirPath(targetPath);
-            try {
+            const removeDirTree = async (dirPath) => {
+                const base = ctx.ensureDirPath(dirPath);
                 const { files, dirs } = await collectTreePaths('/');
                 for (let file of files) {
                     if (file.startsWith(base)) ctx.vfs.rm(file);
@@ -1799,13 +1827,48 @@ function createShell(vfs, options = {}) {
                 const dirsToRemove = dirs.filter((dir) => dir.startsWith(base)).sort((a, b) => b.length - a.length);
                 dirsToRemove.forEach((dir) => ctx.vfs.rm(dir));
                 ctx.vfs.rm(base);
-                return { output: '', status: 0 };
-            } catch (error) {
-                if (force) {
-                    return { output: '', status: 0 };
+            };
+            for (let t = 0; t < targets.length; t++) {
+                const targetArg = targets[t];
+                const targetPath = ctx.resolvePath(targetArg);
+                if (!targetPath.endsWith('/')) {
+                    if (recursive) {
+                        try {
+                            await ctx.vfs.get(targetPath);
+                            ctx.vfs.rm(targetPath);
+                            continue;
+                        } catch (error) {
+                            // fall through to directory removal
+                        }
+                    } else {
+                        try {
+                            ctx.vfs.rm(targetPath);
+                            continue;
+                        } catch (error) {
+                            if (force) {
+                                continue;
+                            }
+                            return { output: `Error: ${targetArg} is not a file`, status: 1, stderr: true };
+                        }
+                    }
                 }
-                return errorResult(ctx, 'Invalid directory');
+                if (!recursive) {
+                    if (force) {
+                        continue;
+                    }
+                    return { output: 'Error: Use -r for directories', status: 1, stderr: true };
+                }
+                const base = ctx.ensureDirPath(targetPath);
+                try {
+                    await removeDirTree(base);
+                } catch (error) {
+                    if (force) {
+                        continue;
+                    }
+                    return { output: 'Error: Invalid directory', status: 1, stderr: true };
+                }
             }
+            return { output: '', status: 0 };
         }
     });
 
@@ -1815,11 +1878,11 @@ function createShell(vfs, options = {}) {
         usage: 'less <file>',
         execute: async (args, ctx) => {
             if (!args[1]) {
-                return errorResult(ctx, 'No file given');
+                return { output: 'Error: No file given', status: 1, stderr: true };
             }
             const path = ctx.resolvePath(args[1]);
             if (path.endsWith('/')) {
-                return errorResult(ctx, '' + args[1] + ' is not a file');
+                return { output: `Error: ${args[1]} is not a file`, status: 1, stderr: true };
             }
             try {
                 const content = await ctx.vfs.get(path);
@@ -1828,7 +1891,7 @@ function createShell(vfs, options = {}) {
                     status: 0
                 };
             } catch (error) {
-                return errorResult(ctx, '' + args[1] + ' is not a file');
+                return { output: `Error: ${args[1]} is not a file`, status: 1, stderr: true };
             }
         }
     });
@@ -1842,17 +1905,17 @@ function createShell(vfs, options = {}) {
                 return { output: formatOutput(input, ctx), status: 0 };
             }
             if (!args[1]) {
-                return errorResult(ctx, 'No file given');
+                return { output: '', status: 0 };
             }
             const path = ctx.resolvePath(args[1]);
             if (path.endsWith('/')) {
-                return errorResult(ctx, '' + args[1] + ' is not a file');
+                return { output: `Error: ${args[1]} is not a file`, status: 1, stderr: true };
             }
             try {
                 const content = await readFileContent(path, ctx);
                 return { output: formatOutput(content, ctx), status: 0 };
             } catch (error) {
-                return errorResult(ctx, '' + args[1] + ' is not a file');
+                return { output: `Error: ${args[1]} is not a file`, status: 1, stderr: true };
             }
         }
     });
@@ -1863,17 +1926,17 @@ function createShell(vfs, options = {}) {
         usage: 'more <file>',
         execute: async (args, ctx) => {
             if (!args[1]) {
-                return errorResult(ctx, 'No file given');
+                return { output: 'Error: No file given', status: 1, stderr: true };
             }
             const path = ctx.resolvePath(args[1]);
             if (path.endsWith('/')) {
-                return errorResult(ctx, '' + args[1] + ' is not a file');
+                return { output: `Error: ${args[1]} is not a file`, status: 1, stderr: true };
             }
             try {
                 const content = await readFileContent(path, ctx);
                 return { output: formatOutput(content, ctx), status: 0 };
             } catch (error) {
-                return errorResult(ctx, '' + args[1] + ' is not a file');
+                return { output: `Error: ${args[1]} is not a file`, status: 1, stderr: true };
             }
         }
     });
@@ -1891,7 +1954,7 @@ function createShell(vfs, options = {}) {
             const byteCount = parsed.options.bytes !== null ? Number(parsed.options.bytes) : null;
             const fileArg = parsed.rest[0] || null;
             if (!fileArg && !ctx.hasInput) {
-                return errorResult(ctx, 'No file given');
+                return { output: 'Error: No file given', status: 1, stderr: true };
             }
             try {
                 const content = fileArg ? await readFileContent(ctx.resolvePath(fileArg), ctx) : input;
@@ -1903,7 +1966,7 @@ function createShell(vfs, options = {}) {
                 const lines = splitLines(content);
                 return { output: formatOutput(lines.slice(0, normalizedCount), ctx), status: 0 };
             } catch (error) {
-                return errorResult(ctx, '' + fileArg + ' is not a file');
+                return { output: `Error: ${fileArg} is not a file`, status: 1, stderr: true };
             }
         }
     });
@@ -1921,7 +1984,7 @@ function createShell(vfs, options = {}) {
             const byteCount = parsed.options.bytes !== null ? Number(parsed.options.bytes) : null;
             const fileArg = parsed.rest[0] || null;
             if (!fileArg && !ctx.hasInput) {
-                return errorResult(ctx, 'No file given');
+                return { output: 'Error: No file given', status: 1, stderr: true };
             }
             try {
                 const content = fileArg ? await readFileContent(ctx.resolvePath(fileArg), ctx) : input;
@@ -1939,7 +2002,7 @@ function createShell(vfs, options = {}) {
                 }
                 return { output: formatOutput(lines.slice(-normalizedCount), ctx), status: 0 };
             } catch (error) {
-                return errorResult(ctx, '' + fileArg + ' is not a file');
+                return { output: `Error: ${fileArg} is not a file`, status: 1, stderr: true };
             }
         }
     });
@@ -1957,7 +2020,7 @@ function createShell(vfs, options = {}) {
             let showWords = parsed.options.words;
             let showBytes = parsed.options.bytes;
             const fileArg = parsed.rest[0] || null;
-            if (!fileArg && !ctx.hasInput) return errorResult(ctx, 'No file given');
+            if (!fileArg && !ctx.hasInput) return { output: 'Error: No file given', status: 1, stderr: true };
             try {
                 const content = fileArg ? await readFileContent(ctx.resolvePath(fileArg), ctx) : input;
                 const lineCount = (content.match(/\r?\n/g) || []).length;
@@ -1975,7 +2038,7 @@ function createShell(vfs, options = {}) {
                 if (fileArg) parts.push(fileArg);
                 return { output: parts.join(' '), status: 0 };
             } catch (error) {
-                return errorResult(ctx, '' + fileArg + ' is not a file');
+                return { output: `Error: ${fileArg} is not a file`, status: 1, stderr: true };
             }
         }
     });
@@ -1992,17 +2055,17 @@ function createShell(vfs, options = {}) {
             const flags = parsed.options.ignoreCase ? 'i' : '';
             const showLineNumbers = parsed.options.lineNumbers;
             const invertMatch = parsed.options.invert;
-            if (parsed.rest.length < 1) return errorResult(ctx, 'Missing pattern');
+            if (parsed.rest.length < 1) return { output: 'Error: Missing pattern', status: 1, stderr: true };
             const pattern = stripQuotes(parsed.rest[0]);
             const fileArg = parsed.rest[1];
             let regex;
             try {
                 regex = new RegExp(pattern, flags);
             } catch (error) {
-                return errorResult(ctx, 'Invalid pattern');
+                return { output: 'Error: Invalid pattern', status: 1, stderr: true };
             }
             try {
-                if (!fileArg && !ctx.hasInput) return errorResult(ctx, 'Missing file');
+                if (!fileArg && !ctx.hasInput) return { output: 'Error: Missing file', status: 1, stderr: true };
                 const content = fileArg ? await readFileContent(ctx.resolvePath(fileArg), ctx) : input;
                 const lines = splitLines(content);
                 const matches = [];
@@ -2014,7 +2077,7 @@ function createShell(vfs, options = {}) {
                 });
                 return { output: formatOutput(matches, ctx), status: matches.length ? 0 : 1 };
             } catch (error) {
-                return errorResult(ctx, '' + fileArg + ' is not a file');
+                return { output: `Error: ${fileArg} is not a file`, status: 1, stderr: true };
             }
         }
     });
@@ -2025,7 +2088,7 @@ function createShell(vfs, options = {}) {
         usage: 'find [path] <pattern>',
         execute: async (args, ctx) => {
             if (!args[1]) {
-                return errorResult(ctx, 'Missing pattern');
+                return { output: 'Error: Missing pattern', status: 1, stderr: true };
             }
             let baseArg = null;
             let patternArg = null;
@@ -2050,7 +2113,7 @@ function createShell(vfs, options = {}) {
                 const pattern = stripQuotes(patternArg);
                 regex = nameOnly ? new RegExp(`^${globToRegex(pattern)}$`) : new RegExp(pattern);
             } catch (error) {
-                return errorResult(ctx, 'Invalid pattern');
+                return { output: 'Error: Invalid pattern', status: 1, stderr: true };
             }
             try {
                 const entries = await listEntries(basePath, ctx.vfs);
@@ -2066,7 +2129,7 @@ function createShell(vfs, options = {}) {
                     });
                 return { output: formatOutput(matches, ctx), status: 0 };
             } catch (error) {
-                return errorResult(ctx, 'Invalid directory');
+                return { output: 'Error: Invalid directory', status: 1, stderr: true };
             }
         }
     });
@@ -2086,7 +2149,7 @@ function createShell(vfs, options = {}) {
             const keyIndex = parsed.options.keyIndex ? Number(parsed.options.keyIndex) : null;
             const fileArg = parsed.rest[0] || null;
             if (!fileArg && !ctx.hasInput) {
-                return errorResult(ctx, 'No file given');
+                return { output: 'Error: No file given', status: 1, stderr: true };
             }
             try {
                 const content = fileArg ? await readFileContent(ctx.resolvePath(fileArg), ctx) : input;
@@ -2111,7 +2174,7 @@ function createShell(vfs, options = {}) {
                 if (descending) lines.reverse();
                 return { output: formatOutput(lines, ctx), status: 0 };
             } catch (error) {
-                return errorResult(ctx, '' + fileArg + ' is not a file');
+                return { output: `Error: ${fileArg} is not a file`, status: 1, stderr: true };
             }
         }
     });
@@ -2130,13 +2193,13 @@ function createShell(vfs, options = {}) {
             const bytes = parsed.options.bytes;
             const fileArg = parsed.rest[0] || null;
             if (fields && bytes) {
-                return errorResult(ctx, 'Invalid options');
+                return { output: 'Error: Invalid options', status: 1, stderr: true };
             }
             if (!fields && !bytes) {
-                return errorResult(ctx, 'Missing field list');
+                return { output: 'Error: Missing field list', status: 1, stderr: true };
             }
             if (!fileArg && !ctx.hasInput) {
-                return errorResult(ctx, 'No file given');
+                return { output: 'Error: No file given', status: 1, stderr: true };
             }
             const buildIndexSet = (list) => {
                 const set = new Set();
@@ -2166,7 +2229,7 @@ function createShell(vfs, options = {}) {
                 });
                 return { output: formatOutput(output, ctx), status: 0 };
             } catch (error) {
-                return errorResult(ctx, '' + fileArg + ' is not a file');
+                return { output: `Error: ${fileArg} is not a file`, status: 1, stderr: true };
             }
         }
     });
@@ -2178,7 +2241,7 @@ function createShell(vfs, options = {}) {
         execute: async (args, ctx, input) => {
             const fileArgs = args.slice(1);
             if (fileArgs.length === 0 && !ctx.hasInput) {
-                return errorResult(ctx, 'No file given');
+                return { output: 'Error: No file given', status: 1, stderr: true };
             }
             const streams = [];
             if (ctx.hasInput) {
@@ -2190,7 +2253,7 @@ function createShell(vfs, options = {}) {
                     const content = await readFileContent(path, ctx);
                     streams.push(splitLines(content));
                 } catch (error) {
-                    return errorResult(ctx, '' + fileArgs[i] + ' is not a file');
+                    return { output: `Error: ${fileArgs[i]} is not a file`, status: 1, stderr: true };
                 }
             }
             if (streams.length === 0) {
@@ -2212,7 +2275,7 @@ function createShell(vfs, options = {}) {
         usage: 'tr [-d] <set1> [set2]',
         execute: async (args, ctx, input) => {
             if (!ctx.hasInput) {
-                return errorResult(ctx, 'No input');
+                return { output: 'Error: No input', status: 1, stderr: true };
             }
             const parsed = parseCommandOptions(args, {
                 boolean: { '-d': 'deleteMode', '-s': 'squeezeMode' },
@@ -2223,7 +2286,7 @@ function createShell(vfs, options = {}) {
             let set1 = parsed.rest[0] || null;
             let set2 = parsed.rest[1] || null;
             if (!set1) {
-                return errorResult(ctx, 'Missing set');
+                return { output: 'Error: Missing set', status: 1, stderr: true };
             }
             const sourceSet = expandCharSet(decodeEscapes(stripQuotes(set1)));
             if (!deleteMode && !set2) {
@@ -2300,7 +2363,7 @@ function createShell(vfs, options = {}) {
                             const fileContent = await ctx.vfs.get(filePath);
                             data = typeof fileContent === 'string' ? fileContent : new TextDecoder().decode(fileContent);
                         } catch (error) {
-                            return errorResult(ctx, 'Unable to read data file');
+                            return { output: 'Error: Unable to read data file', status: 1, stderr: true };
                         }
                     }
                     if (method === 'GET') method = 'POST';
@@ -2314,7 +2377,7 @@ function createShell(vfs, options = {}) {
                 }
                 if (!url) url = arg;
             }
-            if (!url) return errorResult(ctx, 'Missing URL');
+            if (!url) return { output: 'Error: Missing URL', status: 1, stderr: true };
             try {
                 const response = await fetch(url, {
                     method,
@@ -2322,7 +2385,7 @@ function createShell(vfs, options = {}) {
                     body: data
                 });
                 if (!response.ok) {
-                    return errorResult(ctx, `HTTP ${response.status}`);
+                    return { output: `Error: HTTP ${response.status}`, status: 1, stderr: true };
                 }
                 if (outputFile) {
                     const buffer = await response.arrayBuffer();
@@ -2332,7 +2395,7 @@ function createShell(vfs, options = {}) {
                 const text = await response.text();
                 return { output: formatOutput(text, ctx), status: 0 };
             } catch (error) {
-                return errorResult(ctx, 'Request failed');
+                return { output: 'Error: Request failed', status: 1, stderr: true };
             }
         }
     });
@@ -2353,19 +2416,19 @@ function createShell(vfs, options = {}) {
                 }
                 if (!url) url = arg;
             }
-            if (!url) return errorResult(ctx, 'Missing URL');
+            if (!url) return { output: 'Error: Missing URL', status: 1, stderr: true };
             const fallbackName = url.split('/').filter(Boolean).pop() || 'index.html';
             const target = outputFile || fallbackName;
             try {
                 const response = await fetch(url);
                 if (!response.ok) {
-                    return errorResult(ctx, `HTTP ${response.status}`);
+                    return { output: `Error: HTTP ${response.status}`, status: 1, stderr: true };
                 }
                 const buffer = await response.arrayBuffer();
                 await ctx.vfs.put(ctx.resolvePath(target), buffer);
                 return { output: '', status: 0 };
             } catch (error) {
-                return errorResult(ctx, 'Request failed');
+                return { output: 'Error: Request failed', status: 1, stderr: true };
             }
         }
     });
@@ -2375,7 +2438,7 @@ function createShell(vfs, options = {}) {
         summary: 'Run a shell script.',
         usage: 'sh <file>',
         execute: async (args, ctx) => {
-            if (!args[1]) return errorResult(ctx, 'Missing file');
+            if (!args[1]) return { output: 'Error: Missing file', status: 1, stderr: true };
             try {
                 const baseEnv = ctx.env || await getSessionEnv();
                 const envMap = cloneEnv(baseEnv);
@@ -2387,7 +2450,7 @@ function createShell(vfs, options = {}) {
                 if (typeof result === 'string') return { output: result, status: 0 };
                 return { output: '', status: 0 };
             } catch (error) {
-                return errorResult(ctx, 'Unable to read script');
+                return { output: 'Error: Unable to read script', status: 1, stderr: true };
             }
         }
     });
@@ -2397,7 +2460,7 @@ function createShell(vfs, options = {}) {
         summary: 'Run a script in the current shell.',
         usage: 'source <file>',
         execute: async (args, ctx) => {
-            if (!args[1]) return errorResult(ctx, 'Missing file');
+            if (!args[1]) return { output: 'Error: Missing file', status: 1, stderr: true };
             try {
                 const envMap = ctx.env || await getSessionEnv();
                 const path = await resolveScriptPath(args[1], ctx, envMap) || ctx.resolvePath(args[1]);
@@ -2408,7 +2471,7 @@ function createShell(vfs, options = {}) {
                 if (typeof result === 'string') return { output: result, status: 0 };
                 return { output: '', status: 0 };
             } catch (error) {
-                return errorResult(ctx, 'Unable to read script');
+                return { output: 'Error: Unable to read script', status: 1, stderr: true };
             }
         }
     });
@@ -2436,10 +2499,10 @@ function createShell(vfs, options = {}) {
             const onlyUniques = parsed.options.uniques;
             const fileArg = parsed.rest[0] || null;
             if (onlyDuplicates && onlyUniques) {
-                return errorResult(ctx, 'Invalid flags');
+                return { output: 'Error: Invalid flags', status: 1, stderr: true };
             }
             if (!fileArg && !ctx.hasInput) {
-                return errorResult(ctx, 'No file given');
+                return { output: 'Error: No file given', status: 1, stderr: true };
             }
             try {
                 const content = fileArg ? await readFileContent(ctx.resolvePath(fileArg), ctx) : input;
@@ -2465,7 +2528,7 @@ function createShell(vfs, options = {}) {
                 flush();
                 return { output: formatOutput(output, ctx), status: 0 };
             } catch (error) {
-                return errorResult(ctx, '' + fileArg + ' is not a file');
+                return { output: `Error: ${fileArg} is not a file`, status: 1, stderr: true };
             }
         }
     });
@@ -2476,16 +2539,16 @@ function createShell(vfs, options = {}) {
         usage: 'sed <script> <file>',
         execute: async (args, ctx, input) => {
             if (!args[1]) {
-                return errorResult(ctx, 'Missing script');
+                return { output: 'Error: Missing script', status: 1, stderr: true };
             }
             const script = stripQuotes(args[1]);
             const fileArg = args[2];
             if (!script.startsWith('s')) {
-                return errorResult(ctx, 'Only substitution scripts are supported');
+                return { output: 'Error: Only substitution scripts are supported', status: 1, stderr: true };
             }
             const delimiter = script[1];
             if (!delimiter) {
-                return errorResult(ctx, 'Invalid script');
+                return { output: 'Error: Invalid script', status: 1, stderr: true };
             }
             const parseSegment = (startIndex) => {
                 let current = '';
@@ -2507,11 +2570,11 @@ function createShell(vfs, options = {}) {
             };
             const patternSegment = parseSegment(2);
             if (!patternSegment) {
-                return errorResult(ctx, 'Invalid script');
+                return { output: 'Error: Invalid script', status: 1, stderr: true };
             }
             const replacementSegment = parseSegment(patternSegment.nextIndex);
             if (!replacementSegment) {
-                return errorResult(ctx, 'Invalid script');
+                return { output: 'Error: Invalid script', status: 1, stderr: true };
             }
             const flags = script.slice(replacementSegment.nextIndex);
             let regex;
@@ -2519,11 +2582,11 @@ function createShell(vfs, options = {}) {
                 const regexFlags = `${flags.includes('g') ? 'g' : ''}${flags.includes('i') ? 'i' : ''}`;
                 regex = new RegExp(patternSegment.value, regexFlags);
             } catch (error) {
-                return errorResult(ctx, 'Invalid pattern');
+                return { output: 'Error: Invalid pattern', status: 1, stderr: true };
             }
             try {
                 if (!fileArg && !ctx.hasInput) {
-                    return errorResult(ctx, 'Missing file');
+                    return { output: 'Error: Missing file', status: 1, stderr: true };
                 }
                 const content = fileArg ? await readFileContent(ctx.resolvePath(fileArg), ctx) : input;
                 return {
@@ -2531,7 +2594,7 @@ function createShell(vfs, options = {}) {
                     status: 0
                 };
             } catch (error) {
-                return errorResult(ctx, '' + fileArg + ' is not a file');
+                return { output: `Error: ${fileArg} is not a file`, status: 1, stderr: true };
             }
         }
     });
@@ -2542,20 +2605,20 @@ function createShell(vfs, options = {}) {
         usage: 'awk <script> <file>',
         execute: async (args, ctx, input) => {
             if (!args[1]) {
-                return errorResult(ctx, 'Missing script');
+                return { output: 'Error: Missing script', status: 1, stderr: true };
             }
             const script = stripQuotes(args[1]);
             const fileArg = args[2];
             const printMatch = script.match(/print\s+(.+)/);
             if (!printMatch) {
-                return errorResult(ctx, 'Only print scripts are supported');
+                return { output: 'Error: Only print scripts are supported', status: 1, stderr: true };
             }
             let fieldsPart = printMatch[1].trim();
             fieldsPart = fieldsPart.replace(/^\{|\}$/g, '').trim();
             const fields = fieldsPart.split(/\s*,\s*/).filter(Boolean);
             try {
                 if (!fileArg && !ctx.hasInput) {
-                    return errorResult(ctx, 'Missing file');
+                    return { output: 'Error: Missing file', status: 1, stderr: true };
                 }
                 const content = fileArg ? await readFileContent(ctx.resolvePath(fileArg), ctx) : input;
                 const lines = splitLines(content);
@@ -2579,7 +2642,7 @@ function createShell(vfs, options = {}) {
                 });
                 return { output: formatOutput(output, ctx), status: 0 };
             } catch (error) {
-                return errorResult(ctx, '' + fileArg + ' is not a file');
+                return { output: `Error: ${fileArg} is not a file`, status: 1, stderr: true };
             }
         }
     });
@@ -2589,13 +2652,13 @@ function createShell(vfs, options = {}) {
         summary: 'Read from stdin and write to stdout and files.',
         usage: 'tee <file>',
         execute: async (args, ctx, input) => {
-            if (!args[1]) return errorResult(ctx, 'Missing file');
-            if (!ctx.hasInput) return errorResult(ctx, 'No input');
+            if (!args[1]) return { output: 'Error: Missing file', status: 1, stderr: true };
+            if (!ctx.hasInput) return { output: 'Error: No input', status: 1, stderr: true };
             const path = ctx.resolvePath(args[1]);
             try {
                 await ctx.vfs.put(path, input);
             } catch (error) {
-                return errorResult(ctx, 'Unable to write file');
+                return { output: 'Error: Unable to write file', status: 1, stderr: true };
             }
             return { output: formatOutput(input, ctx), status: 0 };
         }
@@ -2606,9 +2669,9 @@ function createShell(vfs, options = {}) {
         summary: 'Build and execute command lines from input.',
         usage: 'xargs <command> [args...]',
         execute: async (args, ctx, input) => {
-            if (!ctx.hasInput) return errorResult(ctx, 'No input');
+            if (!ctx.hasInput) return { output: 'Error: No input', status: 1, stderr: true };
             const commandName = args[1] || 'echo';
-            if (!commandMap.has(commandName)) return errorResult(ctx, 'Invalid command');
+            if (!commandMap.has(commandName)) return { output: 'Error: Invalid command', status: 1, stderr: true };
             const baseArgs = args.slice(2);
             const handler = commandMap.get(commandName);
             const lines = splitLines(input).filter((line) => line !== '');
@@ -2639,7 +2702,7 @@ function createShell(vfs, options = {}) {
         usage: 'diff <file1> <file2>',
         execute: async (args, ctx) => {
             if (!args[1] || !args[2]) {
-                return errorResult(ctx, 'Missing file');
+                return { output: 'Error: Missing file', status: 1, stderr: true };
             }
             const leftArg = args[1];
             const rightArg = args[2];
@@ -2672,7 +2735,7 @@ function createShell(vfs, options = {}) {
                     status: changed ? 1 : 0
                 };
             } catch (error) {
-                return errorResult(ctx, 'One or both files are invalid');
+                return { output: 'Error: One or both files are invalid', status: 1, stderr: true };
             }
         }
     });
@@ -2766,17 +2829,6 @@ function createShell(vfs, options = {}) {
                 const usage = estimate.usage || 0;
                 const avail = estimate.available || Math.max(0, quota - usage);
                 const usePct = quota ? `${Math.round((usage / quota) * 100)}%` : '0%';
-                const formatBytes = (value) => {
-                    if (!value) return '0B';
-                    const units = ['B', 'KB', 'MB', 'GB', 'TB'];
-                    let size = value;
-                    let unitIndex = 0;
-                    while (size >= 1024 && unitIndex < units.length - 1) {
-                        size /= 1024;
-                        unitIndex += 1;
-                    }
-                    return `${size < 10 && unitIndex > 0 ? size.toFixed(1) : Math.round(size)}${units[unitIndex]}`;
-                };
                 const headers = ['Filesystem', 'Size', 'Used', 'Avail', 'Use%', 'Mounted on'];
                 const values = ['vfs', formatBytes(quota), formatBytes(usage), formatBytes(avail), usePct, '/'];
                 if (ctx.outputMode === 'text') {
@@ -2795,7 +2847,48 @@ function createShell(vfs, options = {}) {
                     status: 0
                 };
             } catch (error) {
-                return errorResult(ctx, 'Storage estimate not available');
+                return { output: 'Error: Storage estimate not available', status: 1, stderr: true };
+            }
+        }
+    });
+
+    registerCommand({
+        name: 'du',
+        summary: 'Estimate file space usage.',
+        usage: 'du [path]',
+        execute: async (args, ctx) => {
+            const parsed = parseCommandOptions(args, {
+                boolean: { '-h': 'human' },
+                defaults: { human: false }
+            });
+            const human = parsed.options.human;
+            const targetArg = parsed.rest[0] || '.';
+            const resolved = targetArg === '.' ? ctx.getCurrentPath() : ctx.resolvePath(targetArg);
+            const isDir = resolved.endsWith('/');
+            try {
+                if (!isDir) {
+                    const content = await ctx.vfs.get(resolved);
+                    const size = typeof content === 'string' ? content.length : content.byteLength || 0;
+                    const displaySize = human ? formatBytes(size) : size;
+                    return { output: `${displaySize}\t${targetArg}`, status: 0 };
+                }
+                const base = ctx.ensureDirPath(resolved);
+                const entries = await walkEntries(base);
+                let total = 0;
+                for (let entry of entries) {
+                    if (entry.isDir) continue;
+                    try {
+                        const content = await ctx.vfs.get(entry.full);
+                        total += typeof content === 'string' ? content.length : content.byteLength || 0;
+                    } catch (error) {
+                        return { output: 'Error: Invalid directory', status: 1, stderr: true };
+                    }
+                }
+                const display = targetArg === '.' ? base : targetArg;
+                const displaySize = human ? formatBytes(total) : total;
+                return { output: `${displaySize}\t${display}`, status: 0 };
+            } catch (error) {
+                return { output: 'Error: Invalid directory', status: 1, stderr: true };
             }
         }
     });
@@ -2819,29 +2912,80 @@ function createShell(vfs, options = {}) {
         usage: 'ls',
         execute: async (args, ctx) => {
             try {
-                const targetArg = args[1] || '';
-                if (!targetArg) {
-                    const children = await ctx.listChildren(ctx.getCurrentPath());
-                    return { output: formatOutput(children, ctx), status: 0 };
+                const parsed = parseCommandOptions(args, {
+                    boolean: { '-l': 'long' },
+                    defaults: { long: false }
+                });
+                const longFormat = parsed.options.long;
+                const targets = parsed.rest;
+                const targetArg = targets[0] || '';
+                const renderListing = async (basePath, entries, preferDirCheck) => {
+                    const names = entries.map((entry) => entry.name);
+                    if (!longFormat) return formatOutput(names, ctx);
+                    const rows = [];
+                    for (let entry of entries) {
+                        const name = entry.name;
+                        const full = entry.full;
+                        let isDir = entry.isDir;
+                        if (preferDirCheck && !isDir) {
+                            try {
+                                isDir = await ctx.dirExists(ctx.ensureDirPath(full));
+                            } catch (error) {
+                                isDir = false;
+                            }
+                        }
+                        let size = 0;
+                        if (!isDir) {
+                            try {
+                                const content = await ctx.vfs.get(full);
+                                size = typeof content === 'string' ? content.length : content.byteLength || 0;
+                            } catch (error) {
+                                size = 0;
+                            }
+                        }
+                        const typeChar = isDir ? 'd' : '-';
+                        rows.push(`${typeChar}rw-r--r-- 1 user group ${size} ${name.replace(/\/$/, '')}`);
+                    }
+                    return formatOutput(rows, ctx);
+                };
+                if (!targets.length) {
+                    const children = await listImmediateEntries(ctx.getCurrentPath(), ctx.vfs);
+                    const entries = children.map((entry) => ({
+                        name: entry.isDir ? `${entry.name}/` : entry.name,
+                        full: ctx.getCurrentPath() === '/' ? `/${entry.name}` : `${ctx.getCurrentPath()}${entry.name}`,
+                        isDir: entry.isDir
+                    }));
+                    return { output: await renderListing(ctx.getCurrentPath(), entries), status: 0 };
                 }
-                if (hasGlobChars(targetArg)) {
-                    const slashIndex = targetArg.lastIndexOf('/');
-                    const baseArg = slashIndex >= 0 ? targetArg.slice(0, slashIndex) : '';
-                    const pattern = slashIndex >= 0 ? targetArg.slice(slashIndex + 1) : targetArg;
-                    const basePath = baseArg ? ctx.ensureDirPath(ctx.resolvePath(baseArg)) : ctx.getCurrentPath();
-                    const matches = (await listImmediateEntries(basePath, ctx.vfs))
-                        .filter((entry) => matchGlob(entry.name, pattern))
-                        .map((entry) => entry.name);
-                    return { output: formatOutput(matches, ctx), status: 0 };
+                const outputBlocks = [];
+                for (let i = 0; i < targets.length; i++) {
+                    const rawTarget = targets[i];
+                    const resolved = ctx.resolvePath(rawTarget);
+                    const resolvedDir = ctx.ensureDirPath(resolved);
+                    if (resolved.endsWith('/') || await ctx.dirExists(resolvedDir)) {
+                        const listPath = resolved.endsWith('/') ? resolved : resolvedDir;
+                        const children = await listImmediateEntries(listPath, ctx.vfs);
+                        const entries = children.map((entry) => ({
+                            name: entry.isDir ? `${entry.name}/` : entry.name,
+                            full: listPath === '/' ? `/${entry.name}` : `${listPath}${entry.name}`,
+                            isDir: entry.isDir
+                        }));
+                        const listing = await renderListing(listPath, entries);
+                        outputBlocks.push(listing);
+                        continue;
+                    }
+                    const name = rawTarget.split('/').filter(Boolean).pop() || rawTarget;
+                    const entry = {
+                        name,
+                        full: resolved,
+                        isDir: false
+                    };
+                    const listing = await renderListing(ctx.getCurrentPath(), [entry], true);
+                    outputBlocks.push(listing);
                 }
-                const resolved = ctx.resolvePath(targetArg);
-                if (resolved.endsWith('/')) {
-                    const children = await ctx.listChildren(resolved);
-                    return { output: formatOutput(children, ctx), status: 0 };
-                }
-                return { output: targetArg, status: 0 };
+                return { output: outputBlocks.filter(Boolean).join(ctx.outputMode === 'text' ? '\n' : '<br>'), status: 0 };
             } catch (error) {
-                return errorResult(ctx, 'Invalid directory');
+                return { output: 'Error: Invalid directory', status: 1, stderr: true };
             }
         }
     });
@@ -2871,7 +3015,7 @@ function createShell(vfs, options = {}) {
                 ctx.setCurrentPath(newPath);
                 return { output: '', status: 0 };
             }
-            return errorResult(ctx, 'Invalid directory');
+            return { output: 'Error: Invalid directory', status: 1, stderr: true };
         }
     });
 
@@ -2890,7 +3034,7 @@ function createShell(vfs, options = {}) {
             const dirPath = ctx.ensureDirPath(ctx.resolvePath(targetArg));
             if (!recursive) {
                 if (await ctx.dirExists(dirPath)) {
-                    return errorResult(ctx, 'File exists');
+                    return { output: 'Error: File exists', status: 1, stderr: true };
                 }
                 ctx.vfs.put(dirPath, '');
                 return { output: '', status: 0 };
@@ -2916,17 +3060,17 @@ function createShell(vfs, options = {}) {
             const targetPath = ctx.resolvePath(args[1]);
             const linkPath = ctx.resolvePath(args[2]);
             if (targetPath.endsWith('/') || linkPath.endsWith('/')) {
-                return errorResult(ctx, 'Links to files only');
+                return { output: 'Error: Links to files only', status: 1, stderr: true };
             }
             try {
                 const content = await ctx.vfs.get(targetPath);
                 if (typeof content !== 'string') {
-                    return errorResult(ctx, '' + args[1] + ' is not a file');
+                    return { output: `Error: ${args[1]} is not a file`, status: 1, stderr: true };
                 }
                 await ctx.vfs.put(linkPath, content);
                 return { output: '', status: 0 };
             } catch (error) {
-                return errorResult(ctx, '' + args[1] + ' is not a file');
+                return { output: `Error: ${args[1]} is not a file`, status: 1, stderr: true };
             }
         }
     });
@@ -2934,25 +3078,67 @@ function createShell(vfs, options = {}) {
     registerCommand({
         name: 'stat',
         summary: 'Display file status.',
-        usage: 'stat <file>',
+        usage: 'stat [-c FORMAT] <file>',
         execute: async (args, ctx) => {
-            if (!args[1]) {
-                return errorResult(ctx, 'Missing file');
+            const parsed = parseCommandOptions(args, {
+                value: { '-c': 'format' },
+                defaults: { format: null }
+            });
+            const format = parsed.options.format;
+            const fileArg = parsed.rest[0];
+            if (!fileArg) {
+                return { output: 'Error: Missing file', status: 1, stderr: true };
             }
-            const path = ctx.resolvePath(args[1]);
+            const path = ctx.resolvePath(fileArg);
             if (path.endsWith('/')) {
-                return errorResult(ctx, 'Invalid file');
+                return { output: 'Error: Invalid file', status: 1, stderr: true };
             }
             try {
                 const content = await ctx.vfs.get(path);
                 const size = typeof content === 'string' ? content.length : content.byteLength || 0;
+                if (format) {
+                    const fileName = fileArg;
+                    const fileType = 'regular file';
+                    const rendered = format.replace(/%%|%[nFs]/g, (match) => {
+                        if (match === '%%') return '%';
+                        if (match === '%n') return fileName;
+                        if (match === '%s') return String(size);
+                        if (match === '%F') return fileType;
+                        return match;
+                    });
+                    return { output: rendered, status: 0 };
+                }
                 return {
-                    output: `File: ${args[1]}<br>Size: ${size} bytes<br>Type: file`,
+                    output: `File: ${fileArg}<br>Size: ${size} bytes<br>Type: file`,
                     status: 0
                 };
             } catch (error) {
-                return errorResult(ctx, '' + args[1] + ' is not a file');
+                return { output: `Error: ${fileArg} is not a file`, status: 1, stderr: true };
             }
+        }
+    });
+
+    registerCommand({
+        name: 'chmod',
+        summary: 'Change file mode bits.',
+        usage: 'chmod <mode> <path>',
+        execute: async (args, ctx) => {
+            if (!args[1] || !args[2]) {
+                return { output: 'Error: Missing file', status: 1, stderr: true };
+            }
+            return { output: '', status: 0 };
+        }
+    });
+
+    registerCommand({
+        name: 'chown',
+        summary: 'Change file owner and group.',
+        usage: 'chown <owner> <path>',
+        execute: async (args, ctx) => {
+            if (!args[1] || !args[2]) {
+                return { output: 'Error: Missing file', status: 1, stderr: true };
+            }
+            return { output: '', status: 0 };
         }
     });
 
@@ -2979,7 +3165,7 @@ function createShell(vfs, options = {}) {
         execute: async (args, ctx) => {
             const closing = args[args.length - 1];
             if (closing !== ']') {
-                return errorResult(ctx, 'Missing ]');
+                return { output: 'Error: Missing ]', status: 1, stderr: true };
             }
             const inner = args.slice(0, -1);
             return await commandMap.get('test').execute(inner, ctx);
@@ -2993,10 +3179,10 @@ function createShell(vfs, options = {}) {
         execute: async (args, ctx) => {
             const closing = args[args.length - 1];
             if (closing !== ']]') {
-                return errorResult(ctx, 'Missing ]]');
+                return { output: 'Error: Missing ]]', status: 1, stderr: true };
             }
             const tokens = args.slice(1, -1);
-            if (!tokens.length) return errorResult(ctx, 'Missing operand');
+            if (!tokens.length) return { output: 'Error: Missing operand', status: 1, stderr: true };
             const expanded = tokens.map((token) => expandArg(token, ctx.env || {}));
             const result = await evaluateTestExpression(expanded, ctx, true);
             if (result.error) {
@@ -3024,6 +3210,64 @@ function createShell(vfs, options = {}) {
                 return { output: '', status: 0 };
             }
             return { output: '', status: 1 };
+        }
+    });
+
+    registerCommand({
+        name: 'which',
+        summary: 'Locate a command.',
+        usage: 'which <command>',
+        execute: async (args, ctx) => {
+            const name = args[1];
+            if (!name) return { output: 'Error: Missing command', status: 1, stderr: true };
+            if (name.includes('/')) {
+                const resolved = ctx.resolvePath(name);
+                try {
+                    const content = await ctx.vfs.get(resolved);
+                    if (typeof content === 'string' || content instanceof ArrayBuffer || content instanceof Uint8Array) {
+                        return { output: resolved, status: 0 };
+                    }
+                } catch (error) {
+                    return { output: '', status: 1 };
+                }
+                return { output: '', status: 1 };
+            }
+            const envMap = ctx.env || {};
+            const pathValue = envMap.PATH ? String(envMap.PATH) : '';
+            const searchPaths = pathValue.split(':').map((part) => part || '.');
+            for (let i = 0; i < searchPaths.length; i++) {
+                const base = searchPaths[i].startsWith('/') ? searchPaths[i] : ctx.resolvePath(searchPaths[i]);
+                const dir = ctx.ensureDirPath(base);
+                const candidate = `${dir}${name}`;
+                try {
+                    const content = await ctx.vfs.get(candidate);
+                    if (typeof content === 'string' || content instanceof ArrayBuffer || content instanceof Uint8Array) {
+                        return { output: candidate, status: 0 };
+                    }
+                } catch (error) {
+                    continue;
+                }
+            }
+            return { output: '', status: 1 };
+        }
+    });
+
+    registerCommand({
+        name: 'type',
+        summary: 'Describe a command.',
+        usage: 'type <command>',
+        execute: async (args, ctx) => {
+            const name = args[1];
+            if (!name) return { output: 'Error: Missing command', status: 1, stderr: true };
+            if (commandMap.has(name)) {
+                return { output: `${name} is a shell builtin`, status: 0 };
+            }
+            const envMap = ctx.env || {};
+            const scriptPath = await resolveScriptPath(name, ctx, envMap);
+            if (scriptPath) {
+                return { output: `${name} is ${scriptPath}`, status: 0 };
+            }
+            return { output: 'Error: Not found', status: 1, stderr: true };
         }
     });
 
@@ -3081,7 +3325,7 @@ function createShell(vfs, options = {}) {
         execute: async (args, ctx) => {
             const mode = args[1];
             const archiveArg = args[2];
-            if (!mode || !archiveArg) return errorResult(ctx, 'Missing archive');
+            if (!mode || !archiveArg) return { output: 'Error: Missing archive', status: 1, stderr: true };
             const archivePath = ctx.resolvePath(archiveArg);
             try {
                 if (mode === '-cf') {
@@ -3128,9 +3372,9 @@ function createShell(vfs, options = {}) {
                     }
                     return { output: '', status: 0 };
                 }
-                return errorResult(ctx, 'Invalid mode');
+                return { output: 'Error: Invalid mode', status: 1, stderr: true };
             } catch (error) {
-                return errorResult(ctx, 'Unable to process archive');
+                return { output: 'Error: Unable to process archive', status: 1, stderr: true };
             }
         }
     });
@@ -3140,9 +3384,9 @@ function createShell(vfs, options = {}) {
         summary: 'Create a zip backup of the virtual file system.',
         usage: 'backup <filename>',
         execute: async (args, ctx) => {
-            if (!args[1]) return errorResult(ctx, 'Missing filename');
+            if (!args[1]) return { output: 'Error: Missing filename', status: 1, stderr: true };
             const JSZipRef = typeof JSZip !== 'undefined' ? JSZip : globalThis.JSZip;
-            if (!JSZipRef) return errorResult(ctx, 'JSZip is not available');
+            if (!JSZipRef) return { output: 'Error: JSZip is not available', status: 1, stderr: true };
             let filename = args[1];
             if (!filename.endsWith('.zip')) filename += '.zip';
             const path = ctx.resolvePath(filename);
@@ -3159,7 +3403,7 @@ function createShell(vfs, options = {}) {
                 await ctx.vfs.put(path, blob);
                 return { output: 'Backup saved to ' + filename, status: 0 };
             } catch (error) {
-                return errorResult(ctx, 'Unable to create backup');
+                return { output: 'Error: Unable to create backup', status: 1, stderr: true };
             }
         }
     });
@@ -3169,7 +3413,7 @@ function createShell(vfs, options = {}) {
         summary: 'Edit a file.',
         usage: 'edit <file>',
         execute: async (args, ctx) => {
-            if (!ctx.hooks.edit) return errorResult(ctx, 'No editor available');
+            if (!ctx.hooks.edit) return { output: 'Error: No editor available', status: 1, stderr: true };
             if (!args[1]) return { output: '', status: 0 };
             const path = ctx.resolvePath(args[1]);
             await ctx.hooks.edit(path);
