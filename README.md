@@ -15,7 +15,7 @@ which also should be able to show that the whole operation is done without inter
 
 We need a LLM as back-end for the chat. We use llama.cpp for this. To run the server, do:
 
-```
+```shell
 # clone and build llama.cpp (do this just once)
 cd ..
 git clone https://github.com/ggerganov/llama.cpp.git
