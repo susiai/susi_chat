@@ -6,6 +6,9 @@ function createChatExecutor(deps) {
         shell,
         vfs,
         llm,
+        listModels,
+        ollamaPull,
+        ollamaDelete,
         getApihost,
         setApihost,
         getModel,
@@ -283,6 +286,30 @@ function createChatExecutor(deps) {
     });
 
     registerCommand({
+        name: 'models',
+        summary: 'List available models.',
+        usage: 'models',
+        execute: async () => {
+            try {
+                const data = await listModels({ baseUrl: getApihost(), apiKey: getApikey() });
+                const models = Array.isArray(data.data) ? data.data : [];
+                if (!models.length) {
+                    log('No models returned.');
+                    return;
+                }
+                const names = models
+                    .map((entry) => entry && entry.id ? entry.id : '')
+                    .filter(Boolean)
+                    .sort();
+                names.forEach((name) => log(name));
+            } catch (error) {
+                log('Error fetching models.');
+                console.error(error);
+            }
+        }
+    });
+
+    registerCommand({
         name: 'apikey',
         summary: 'Set the API key.',
         usage: 'apikey <key>',
@@ -446,6 +473,44 @@ function createChatExecutor(deps) {
                         })
                         .catch(error => log('Error: ' + error.message));
                 }
+            }
+        }
+    });
+
+    registerCommand({
+        name: 'pull',
+        summary: 'Pull an Ollama model.',
+        usage: 'pull <model>',
+        execute: async (args) => {
+            if (!args[1]) {
+                log('Usage: pull <model>');
+                return;
+            }
+            try {
+                await ollamaPull({ baseUrl: getApihost(), apiKey: getApikey(), model: args[1] });
+                log('Pulled model: ' + args[1]);
+            } catch (error) {
+                log('Error pulling model.');
+                console.error(error);
+            }
+        }
+    });
+
+    registerCommand({
+        name: 'delete',
+        summary: 'Delete an Ollama model.',
+        usage: 'delete <model>',
+        execute: async (args) => {
+            if (!args[1]) {
+                log('Usage: delete <model>');
+                return;
+            }
+            try {
+                await ollamaDelete({ baseUrl: getApihost(), apiKey: getApikey(), model: args[1] });
+                log('Deleted model: ' + args[1]);
+            } catch (error) {
+                log('Error deleting model.');
+                console.error(error);
             }
         }
     });

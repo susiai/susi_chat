@@ -27,6 +27,7 @@ let pp = 0.0; // prompt processing
 let tg = 0.0; // text generation
 let stoptokens = ["[/INST]", "<|im_end|>", "<|end_of_turn|>", "<|eot_id|>", "<|end_header_id|>", "<EOS_TOKEN>", "</s>", "<|end|>"];
 let chatHistory = null;
+let llmClient = null;
 terminalStack = [];
 let maxTokens = 600;
 let shell = null;
@@ -113,11 +114,11 @@ async function initializeConfig() {
     apikey = config.apikey || defaultConfig.apikey;
     companion = config.companion || defaultConfig.companion;
     systemPrompt = config.systemprompt || defaultConfig.systemprompt;
-    if (!chatHistory) {
-        chatHistory = new ChatHistory(systemPrompt);
-    } else {
-        chatHistory.reset(systemPrompt);
+    if (!llmClient) {
+        llmClient = createSusiLLM({ systemPrompt });
     }
+    chatHistory = llmClient.history;
+    chatHistory.reset(systemPrompt);
 }
 
 async function bootstrapTerminal() {
@@ -131,6 +132,20 @@ async function bootstrapTerminal() {
         shell,
         vfs,
         llm,
+        listModels: (options = {}) => llmClient.listModels({
+            baseUrl: options.baseUrl || getApihost(),
+            apiKey: options.apiKey || getApikey()
+        }),
+        ollamaPull: (options = {}) => llmClient.ollamaPull({
+            baseUrl: options.baseUrl || getApihost(),
+            apiKey: options.apiKey || getApikey(),
+            model: options.model
+        }),
+        ollamaDelete: (options = {}) => llmClient.ollamaDelete({
+            baseUrl: options.baseUrl || getApihost(),
+            apiKey: options.apiKey || getApikey(),
+            model: options.model
+        }),
         getApihost: () => apihost,
         setApihost: (value) => { apihost = value; },
         getModel: () => model,
@@ -155,6 +170,10 @@ async function bootstrapTerminal() {
         handle: async (command) => {
             const shellResult = await shell.execute(command);
             if (shellResult.handled) {
+                if (shellResult.output === 'Error: Invalid command') {
+                    await chatExecutor.execute(command);
+                    return;
+                }
                 if (shellResult.output) log(shellResult.output);
                 return;
             }
@@ -284,6 +303,7 @@ function readFileAsDataURL(file) {
 }
 
 async function llm(prompt, targethost = apihost, max_tokens = 400, temperature = 0.1, attachment = null) {
+    if (!llmClient) return;
     if (attachment == null) {
         chatHistory.addUser(prompt);
     } else {
@@ -300,140 +320,59 @@ async function llm(prompt, targethost = apihost, max_tokens = 400, temperature =
     terminalLine.innerHTML = `${marked.parse("[preparing answer...]")}`
     terminal.appendChild(terminalLine);
     console.log('messages', chatHistory.getMessages());
-    const payload = {
-        model: model, //n_keep: n_keep,
-        //repeat_penalty: 1.0,
-        //penalize_nl: false, // see https://huggingface.co/google/gemma-7b-it/discussions/38#65d7b14adb51f7c160769fa1
-        messages: chatHistory.getMessages(), stream: true
-    }
-    if (model.startsWith('o4') || model.startsWith('gpt-4.1')) {
-        payload['max_completion_tokens'] = max_tokens;
-    } else {
-        payload['max_tokens'] = max_tokens;
-        payload['temperature'] = temperature;
-        payload['stop'] = stoptokens;
-    }
-    const headers = { "Content-Type": "application/json" }
-    if (apikey && apikey != '' && apikey != '_') {
-        headers['Authorization'] = 'Bearer ' + apikey;
-    }
-    fetch(targethost + '/v1/chat/completions', {
-        method: "POST",
-        headers: headers,
-        body: JSON.stringify(payload)
-    })
-    .then(response => {
-        if (response.ok) {
-            console.log(response.headers);
-            return response.body.getReader();
-        } else {
-            throw new Error(`Error: ${response.status}`);
-        }
-    })
-    .then(reader => {
-        let fullOutputText = "";
-        let startTime = performance.now();
-        let processingTime = 0;
-        let tokenCount = 0;
-        function processChunk() {
-            reader.read().then(result => {
-                if (result.done) {
-                    chatHistory.addAssistant(fullOutputText);
-                    let endTime = performance.now();
-                    let pp = Math.floor(processingTime - startTime);
-                    let tg = Math.floor(100000 * tokenCount / (endTime - processingTime)) / 100;
-                    return;
-                }
-                let lines = new TextDecoder().decode(result.value).split('\n');
-                lines.forEach(line => {
-                    line = line.replace(/^data: /, '').trim();
-                    if (line) {
-                        if (line === '[DONE]') return;
-                        if (line.startsWith('error')) {
-                            console.error('Error:', line);
-                            terminalLine.innerHTML = `<i>${line}</i>`;
-                            return;
-                        }
-                        try {
-                            let json = JSON.parse(line);
-                            if (json.choices[0].delta.content) {
-                                let outputText = json.choices[0].delta.content;
-                                fullOutputText = removeStringsFromEnd(fullOutputText + outputText, stringsToRemove);
-                                terminalLine.innerHTML = `${marked.parse(fullOutputText, { sanitize: true })}`;
-                                terminalLine.querySelectorAll('pre code').forEach((block) => {
-                                    if (!block.dataset.highlighted) {
-                                        hljs.highlightElement(block);
-                                        block.dataset.highlighted = true;
-                                    }
-                                });
-                                if (processingTime == 0) processingTime = performance.now();
-                                tokenCount += 1;
-                                scrollToBottom();
-                            }
-                        } catch (e) {
-                            console.error('Error parsing JSON:', e);
-                            console.error('Problematic line:', line); // Debug line
-                        }
-                    }
-                });
-                processChunk();
-            });
-        }
-        processChunk();
-    })
-    .catch(error => {
-        console.error(error.message);
-    });
-
-    function removeStringsFromEnd(text, strings) {
+    let fullOutputText = "";
+    const removeStringsFromEnd = (text, strings) => {
         for (let str of strings) {
             if (text.endsWith(str)) {
                 return text.substring(0, text.length - str.length);
             }
         }
         return text;
+    };
+    try {
+        await llmClient.streamChat({
+            baseUrl: targethost,
+            apiKey: apikey,
+            model,
+            messages: chatHistory.getMessages(),
+            maxTokens: max_tokens,
+            temperature,
+            stopTokens: stoptokens,
+            onToken: (token) => {
+                fullOutputText = removeStringsFromEnd(fullOutputText + token, stringsToRemove);
+                terminalLine.innerHTML = `${marked.parse(fullOutputText, { sanitize: true })}`;
+                terminalLine.querySelectorAll('pre code').forEach((block) => {
+                    if (!block.dataset.highlighted) {
+                        hljs.highlightElement(block);
+                        block.dataset.highlighted = true;
+                    }
+                });
+                scrollToBottom();
+            },
+            onError: (line) => {
+                console.error('Error:', line);
+                terminalLine.innerHTML = `<i>${line}</i>`;
+            }
+        });
+        chatHistory.addAssistant(fullOutputText);
+    } catch (error) {
+        console.error(error.message);
     }
 }
 
 function llm_warmup(targethost = apihost, temperature = 0.1, max_tokens = 400) {
-    let m = [{
-        role: 'system',
-        content: defaultSystemPrompt
-    }];
-    const payload = {
-        model: model, temperature: temperature, max_tokens: max_tokens, n_keep: 0,
-        messages: m, stop: stoptokens
-    };
-
-    return fetch(targethost + '/v1/chat/completions', {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload)
+    if (!llmClient) return Promise.resolve(null);
+    return llmClient.warmup({
+        baseUrl: targethost,
+        model,
+        temperature,
+        maxTokens: max_tokens,
+        stopTokens: stoptokens,
+        systemPrompt: defaultSystemPrompt
     })
-    .then(response => {
-        if (response.ok) {
-            return response.json().then(data => {
-                // get answer
-                let answer = data.choices[0].message.content;
-
-                // get usage metrics
-                let usage = data.usage;
-                let completion_tokens = usage.completion_tokens; // 203
-                let prompt_tokens = usage.prompt_tokens; // 106
-                let total_tokens = usage.total_tokens; // 309
-
-                // set keep tokens
-                n_keep = prompt_tokens;
-                return {
-                    answer: answer,
-                    completion_tokens: completion_tokens,
-                    prompt_tokens: prompt_tokens,
-                    total_tokens: total_tokens
-                };
-            });
-        } else {
-            throw new Error(`Error: ${response.status}`);
-        }
+    .then((result) => {
+        n_keep = result.prompt_tokens;
+        return result;
     })
     .catch(error => {
         console.error(error.message);

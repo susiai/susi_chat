@@ -1576,6 +1576,9 @@ function createShell(vfs, options = {}) {
         command = expanded.command;
         if (record) recordHistory(command.trim());
         const tokens = tokenizeShell(command);
+        // Note: natural-language input can include shell keywords/operators (e.g., "do") and set hasOperators=true.
+        // If that misclassification happens, the fallback in the command router will now route invalid commands to chat.
+        // TODO: enhance command parser to better distinguish chat text from shell syntax.
         const hasOperators = tokens.some((token) => token.type !== 'WORD' && token.type !== 'EOF');
         if (!hasOperators) {
             const firstWord = tokens.find((token) => token.type === 'WORD');
@@ -1591,6 +1594,13 @@ function createShell(vfs, options = {}) {
         }
         const parsed = parseShellTokens(tokens);
         if (parsed.error) {
+            const firstWord = tokens.find((token) => token.type === 'WORD');
+            if (firstWord && !commandMap.has(firstWord.value)) {
+                const scriptPath = await resolveScriptPath(firstWord.value, getContext(), envMap);
+                if (!scriptPath) {
+                    return { handled: false, output: '' };
+                }
+            }
             envMap['?'] = '1';
             return { handled: true, output: parsed.error };
         }
